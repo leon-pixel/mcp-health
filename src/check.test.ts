@@ -109,4 +109,16 @@ describe("runCheck", () => {
     expect(report.summary.fail).toBe(0);
     expect(report.servers.some((s) => s.name === "memory")).toBe(true);
   });
+
+  it("probes fixture stdio server successfully", async () => {
+    const report = await runCheck({
+      root: join(fixtures, "probe-ok"),
+      includeUserConfig: false,
+      probe: true,
+      probeTimeoutMs: 5000,
+    });
+    expect(report.summary.fail).toBe(0);
+    const codes = report.servers.flatMap((s) => s.findings.map((f) => f.code));
+    expect(codes).toContain("PROBE_OK");
+  });
 });

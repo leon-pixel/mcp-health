@@ -13,8 +13,8 @@ Not a registry UI. Not a hosted dashboard. A sharp check + optional probe.
 | 1 | Static config scan (paths, parse, PATH, URL, pins, placeholders) | Done (0.1.0) |
 | 2 | Client path matrix: Cursor, Claude Desktop, Claude Code, VS Code | Done (0.2.0) |
 | 3 | npm registry version drift (`--online`) | Done (0.2.0) |
-| 4 | Optional stdio/HTTP smoke probe (`--probe`, timeout, no secrets logged) | Next |
-| 5 | Reusable GitHub Action (composite) + SARIF/annotations | Planned |
+| 4 | Optional stdio/HTTP smoke probe (`--probe`, timeout, no secrets logged) | Done (0.3.0) |
+| 5 | Reusable GitHub Action (composite) + SARIF/annotations | Next |
 | 6 | `npm publish` + versioned GitHub Release + changelog | Planned |
 | 7 | Docs: install, CI recipes, security notes, troubleshooting | Planned |
 | 8 | Portfolio case study link (separate repo work) | After 6 |
@@ -31,14 +31,14 @@ Not a registry UI. Not a hosted dashboard. A sharp check + optional probe.
 - Tests + fixtures + README
 - Shipped **0.2.0**
 
-### Phase B — Smoke probe (next)
+### Phase B — Smoke probe ✅
 - `--probe`: spawn stdio servers briefly / initialize HTTP MCP where safe
 - Hard timeouts, kill orphans, never print env values
 - Exit codes stay: 0 ok / 1 warn / 2 fail
-- Bump **0.3.0** → push
+- Shipped **0.3.0**
 
-### Phase C — Distribution
-- Composite GitHub Action `leon-pixel/mcp-health@v1`
+### Phase C — Distribution (next)
+- Composite GitHub Action `leon-pixel/mcp-health`
 - CHANGELOG, release workflow on tag
 - Publish to npm as `mcp-health` (or scoped if name taken)
 - Bump **1.0.0** → push + tag

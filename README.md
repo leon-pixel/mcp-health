@@ -29,6 +29,9 @@ npm run check -- --no-user fixtures/issues
 # npm registry drift (network)
 npm run check -- --no-user --online fixtures/healthy
 
+# Smoke probe (spawns local servers briefly)
+npm run check -- --no-user --probe --probe-timeout 5000 fixtures/probe-ok
+
 # JSON for CI
 npm run check -- --no-user --json fixtures/healthy
 
@@ -78,6 +81,13 @@ Supports `mcpServers` and `servers` maps with stdio (`command`/`args`) or HTTP (
 - Lookup package on npm registry
 - Warn if unpinned (suggest latest) or pinned version ≠ latest (`NPM_DRIFT`)
 
+**With `--probe`:**
+
+- stdio: spawn server, send MCP `initialize`, expect JSON-RPC result (timeout via `--probe-timeout`)
+- HTTP: POST initialize; ok if result, warn if reachable but non-MCP, fail on errors
+- Never prints env/secret values
+- Skips probe when static checks already failed
+
 ## Example output
 
 ```text
@@ -106,8 +116,8 @@ Workflow: `.github/workflows/ci.yml`.
 
 ## Tradeoffs
 
-- Default scan is **offline** (CI-safe). `--online` needs network.
-- Does not start MCP servers unless/until `--probe` (roadmap Phase B).
+- Default scan is **offline** (CI-safe). `--online` / `--probe` are opt-in.
+- `--probe` runs real processes — use carefully on untrusted configs.
 - PATH may differ from your IDE — run in the same environment agents use.
 - Dist-tags like `@latest` are treated as drift-prone vs concrete latest.
 

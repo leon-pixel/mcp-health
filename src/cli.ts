@@ -10,7 +10,7 @@ program
   .description(
     "Scan MCP server configs and report health, missing commands, and unpinned packages",
   )
-  .version("0.2.0");
+  .version("0.3.0");
 
 program
   .command("check")
@@ -24,6 +24,17 @@ program
     "Query npm registry for package drift (network required)",
     false,
   )
+  .option(
+    "--probe",
+    "Attempt MCP initialize handshake (spawns local servers briefly)",
+    false,
+  )
+  .option(
+    "--probe-timeout <ms>",
+    "Probe timeout in milliseconds",
+    (v) => Number(v),
+    8000,
+  )
   .action(
     async (
       root: string,
@@ -32,6 +43,8 @@ program
         json?: boolean;
         user?: boolean;
         online?: boolean;
+        probe?: boolean;
+        probeTimeout?: number;
       },
     ) => {
       const report = await runCheck({
@@ -39,6 +52,8 @@ program
         files: opts.file.length ? opts.file : undefined,
         includeUserConfig: opts.user !== false,
         online: Boolean(opts.online),
+        probe: Boolean(opts.probe),
+        probeTimeoutMs: opts.probeTimeout,
       });
 
       process.stdout.write(opts.json ? formatJson(report) : formatHuman(report));

@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { discoverConfigPaths } from "./discover.js";
 import { isOptionalMcpFile, parseConfigFile } from "./parse.js";
 import { checkConfig, extractNpxPackage } from "./check.js";
@@ -7,6 +7,7 @@ import {
   isVersionDrift,
   splitPackageSpec,
 } from "./npm.js";
+import { probeServer, worst } from "./probe.js";
 import type {
   Finding,
   HealthReport,
@@ -14,17 +15,15 @@ import type {
   Severity,
 } from "./types.js";
 
-function worst(a: Severity, b: Severity): Severity {
-  const rank: Record<Severity, number> = { ok: 0, warn: 1, fail: 2 };
-  return rank[a] >= rank[b] ? a : b;
-}
-
 export type RunOptions = {
   root: string;
   files?: string[];
   includeUserConfig?: boolean;
   /** Query npm registry for pinned package drift. */
   online?: boolean;
+  /** Attempt MCP initialize handshake. */
+  probe?: boolean;
+  probeTimeoutMs?: number;
 };
 
 export async function runCheck(options: RunOptions): Promise<HealthReport> {
@@ -38,6 +37,7 @@ export async function runCheck(options: RunOptions): Promise<HealthReport> {
 
   const servers: ServerReport[] = [];
   const files: string[] = [];
+  const probeTimeoutMs = options.probeTimeoutMs ?? 8_000;
 
   for (const path of paths) {
     files.push(path);
@@ -71,7 +71,6 @@ export async function runCheck(options: RunOptions): Promise<HealthReport> {
           ? "warn"
           : "ok";
 
-      // Optional client settings without MCP section → soft skip
       if (
         parsed.format === "none" &&
         isOptionalMcpFile(path) &&
@@ -170,6 +169,24 @@ export async function runCheck(options: RunOptions): Promise<HealthReport> {
             });
           }
         }
+      }
+
+      if (options.probe && result.status !== "fail") {
+        const probed = await probeServer(server, {
+          timeoutMs: probeTimeoutMs,
+          file: path,
+          cwd: dirname(path),
+        });
+        result.findings.push(...probed.findings);
+        result.status = worst(result.status, probed.status);
+      } else if (options.probe && result.status === "fail") {
+        result.findings.push({
+          severity: "warn",
+          code: "PROBE_SKIPPED",
+          message: "Skipped probe because static checks failed",
+          server: server.name,
+          file: path,
+        });
       }
 
       servers.push({

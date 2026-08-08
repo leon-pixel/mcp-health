@@ -1,3 +1,4 @@
+export { probeServer, probeStdioServer, probeHttpServer } from "./probe.js";
 export { discoverConfigPaths } from "./discover.js";
 export { parseConfigFile, isOptionalMcpFile } from "./parse.js";
 export { checkConfig, isVersionPinned, extractNpxPackage } from "./check.js";
