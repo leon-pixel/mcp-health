@@ -1,6 +1,6 @@
 {
   "name": "mcp-health",
-  "version": "0.3.0",
+  "version": "1.0.0",
   "description": "CLI that scans MCP server configs and reports health, versions, and broken entries",
   "main": "./dist/index.js",
   "scripts": {
@@ -15,13 +15,24 @@
     "model-context-protocol",
     "cli",
     "devtools",
-    "cursor"
+    "cursor",
+    "github-action"
   ],
-  "author": "",
+  "author": "leon-pixel",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/leon-pixel/mcp-health.git"
+  },
+  "bugs": {
+    "url": "https://github.com/leon-pixel/mcp-health/issues"
+  },
+  "homepage": "https://github.com/leon-pixel/mcp-health#readme",
   "files": [
     "dist",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md",
+    "action.yml"
   ],
   "license": "MIT",
   "type": "module",

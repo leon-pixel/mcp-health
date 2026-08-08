@@ -8,7 +8,7 @@ const INIT_REQUEST = {
   params: {
     protocolVersion: "2024-11-05",
     capabilities: {},
-    clientInfo: { name: "mcp-health", version: "0.3.0" },
+    clientInfo: { name: "mcp-health", version: "1.0.0" },
   },
 };
 

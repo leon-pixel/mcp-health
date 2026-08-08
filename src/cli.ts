@@ -10,7 +10,7 @@ program
   .description(
     "Scan MCP server configs and report health, missing commands, and unpinned packages",
   )
-  .version("0.3.0");
+  .version("1.0.0");
 
 program
   .command("check")

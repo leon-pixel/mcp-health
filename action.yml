@@ -1,0 +1,52 @@
+name: mcp-health
+description: Scan MCP server configs for broken entries, drift, and optional probes
+author: leon-pixel
+
+branding:
+  icon: check-circle
+  color: green
+
+inputs:
+  path:
+    description: Project root to scan
+    required: false
+    default: "."
+  args:
+    description: Extra CLI args (e.g. --no-user --online --probe)
+    required: false
+    default: "--no-user"
+  node-version:
+    description: Node.js version
+    required: false
+    default: "20"
+
+outputs:
+  exit-code:
+    description: mcp-health exit code (0 ok, 1 warn, 2 fail)
+    value: ${{ steps.run.outputs.exit-code }}
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Install and build mcp-health
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        npm ci
+        npm run build
+
+    - name: Run mcp-health check
+      id: run
+      shell: bash
+      run: |
+        set +e
+        node "${{ github.action_path }}/dist/cli.js" check ${{ inputs.args }} "${{ inputs.path }}"
+        code=$?
+        set -e
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        exit "$code"
