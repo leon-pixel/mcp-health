@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "broken-binary": {
+      "command": "definitely-not-a-real-mcp-binary-xyz",
+      "args": ["--help"]
+    },
+    "unpinned": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"]
+    },
+    "no-transport": {
+      "env": {
+        "API_KEY": "YOUR_KEY_HERE"
+      }
+    },
+    "bad-url": {
+      "url": "not a url"
+    }
+  }
+}

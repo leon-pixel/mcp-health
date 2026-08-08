@@ -1,0 +1,27 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: node dist/cli.js check --no-user fixtures/healthy
+      - name: Expect failures on issues fixture
+        run: |
+          set +e
+          node dist/cli.js check --no-user fixtures/issues
+          code=$?
+          set -e
+          test "$code" -eq 2
