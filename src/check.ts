@@ -66,7 +66,17 @@ export function checkConfig(file: ConfigFile): {
       severity: "fail",
       code: "UNKNOWN_FORMAT",
       message:
-        "Config is valid JSON but has neither mcpServers nor servers object",
+        "Config is not a JSON object with mcpServers/servers (or was invalid shape)",
+      file: file.path,
+    });
+    return { findings, perServer };
+  }
+
+  if (file.format === "none") {
+    findings.push({
+      severity: "warn",
+      code: "NO_MCP_SECTION",
+      message: "JSON has no mcpServers or servers key",
       file: file.path,
     });
     return { findings, perServer };

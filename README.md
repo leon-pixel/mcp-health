@@ -1,13 +1,13 @@
 # mcp-health
 
-CLI that scans MCP (Model Context Protocol) server configs and reports **broken entries, missing commands, bad URLs, placeholder env vars, and unpinned npx packages**.
+CLI that scans MCP (Model Context Protocol) server configs and reports **broken entries, missing commands, bad URLs, placeholder env vars, unpinned npx packages, and (optional) npm version drift**.
 
-MCP configs are often copied from READMEs and left to rot. `mcp-health` is a local, no-API-key check you can run in a repo or CI before agents fail mysteriously.
+MCP configs are often copied from READMEs and left to rot. `mcp-health` is a local check you can run in a repo or CI before agents fail mysteriously.
 
 ## Install
 
 ```bash
-# from source (dev)
+# from source
 npm install
 npm run check -- --no-user fixtures/healthy
 
@@ -20,11 +20,14 @@ Requires **Node 20+**.
 ## Usage
 
 ```bash
-# Scan current project (also reads ~/.cursor/mcp.json unless --no-user)
+# Scan project (also user-level Cursor / Claude Desktop unless --no-user)
 npm run check -- .
 
-# Fixture demo
+# Offline fixture demo
 npm run check -- --no-user fixtures/issues
+
+# npm registry drift (network)
+npm run check -- --no-user --online fixtures/healthy
 
 # JSON for CI
 npm run check -- --no-user --json fixtures/healthy
@@ -32,36 +35,48 @@ npm run check -- --no-user --json fixtures/healthy
 # Explicit file
 npm run check -- --no-user -f path/to/mcp.json .
 ```
+
 ### Exit codes
 
 | Code | Meaning |
 |------|---------|
 | `0` | All ok |
-| `1` | Warnings only (e.g. unpinned package) |
+| `1` | Warnings only (e.g. unpinned package, npm drift) |
 | `2` | Failures (missing command, bad URL, etc.) |
 
 ## What it scans
 
-Project files (if present):
+**Project (if present):**
 
 - `.cursor/mcp.json`
-- `mcp.json`
-- `.mcp.json`
+- `mcp.json` / `.mcp.json`
 - `.vscode/mcp.json`
+- `.claude/settings.json` / `.claude/settings.local.json`
 
-Optional: `~/.cursor/mcp.json` (disable with `--no-user`).
+**User-level (disable with `--no-user`):**
 
-Supports `mcpServers` and `servers` maps with stdio (`command`/`args`) or HTTP (`url`) transports.
+- `~/.cursor/mcp.json`
+- `~/.claude/settings.json`
+- Claude Desktop `claude_desktop_config.json` (macOS / Windows / Linux paths)
 
-## Checks (v0.1)
+Supports `mcpServers` and `servers` maps with stdio (`command`/`args`) or HTTP (`url`) transports. Client settings files without an MCP section are skipped (ok), not failed.
 
-- Invalid / unknown JSON shape
+## Checks
+
+**Always (offline):**
+
+- Invalid JSON / unexpected shape
 - Missing `command` and `url`
 - `command` not found on `PATH`
 - Invalid HTTP(S) URL
 - `npx`/`npm exec` without a package
-- Unpinned package refs (warns: prefer `name@version`)
+- Unpinned package refs
 - Placeholder `env` / args (`YOUR_*`, `changeme`)
+
+**With `--online`:**
+
+- Lookup package on npm registry
+- Warn if unpinned (suggest latest) or pinned version ≠ latest (`NPM_DRIFT`)
 
 ## Example output
 
@@ -87,19 +102,18 @@ files: 1  servers: 4  ok: 0  warn: 1  fail: 3
 - run: node dist/cli.js check --no-user .
 ```
 
-A ready workflow lives in `.github/workflows/ci.yml`.
+Workflow: `.github/workflows/ci.yml`.
 
 ## Tradeoffs
 
-- **Local only:** does not probe remote MCP HTTP endpoints or run servers.
-- **PATH-based:** if your IDE uses a different PATH than the terminal, results can differ — run inside the same environment you use for agents.
-- **Pin heuristic:** version pinning is string-based (`pkg@1.2.3`); dist-tags like `@latest` still count as “pinned” textually but are not immutable.
+- Default scan is **offline** (CI-safe). `--online` needs network.
+- Does not start MCP servers unless/until `--probe` (roadmap Phase B).
+- PATH may differ from your IDE — run in the same environment agents use.
+- Dist-tags like `@latest` are treated as drift-prone vs concrete latest.
 
 ## Roadmap
 
-- Registry version drift vs npm
-- MCP server smoke handshake
-- Cursor / Claude config path matrix expansion
+See [ROADMAP.md](./ROADMAP.md) for the path to **v1.0** (probe, reusable Action, npm publish).
 
 ## License
 

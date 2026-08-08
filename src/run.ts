@@ -1,16 +1,33 @@
 import { resolve } from "node:path";
 import { discoverConfigPaths } from "./discover.js";
-import { parseConfigFile } from "./parse.js";
-import { checkConfig } from "./check.js";
-import type { HealthReport, ServerReport, Severity } from "./types.js";
+import { isOptionalMcpFile, parseConfigFile } from "./parse.js";
+import { checkConfig, extractNpxPackage } from "./check.js";
+import {
+  fetchNpmLatest,
+  isVersionDrift,
+  splitPackageSpec,
+} from "./npm.js";
+import type {
+  Finding,
+  HealthReport,
+  ServerReport,
+  Severity,
+} from "./types.js";
+
+function worst(a: Severity, b: Severity): Severity {
+  const rank: Record<Severity, number> = { ok: 0, warn: 1, fail: 2 };
+  return rank[a] >= rank[b] ? a : b;
+}
 
 export type RunOptions = {
   root: string;
   files?: string[];
   includeUserConfig?: boolean;
+  /** Query npm registry for pinned package drift. */
+  online?: boolean;
 };
 
-export function runCheck(options: RunOptions): HealthReport {
+export async function runCheck(options: RunOptions): Promise<HealthReport> {
   const root = resolve(options.root);
   const paths =
     options.files && options.files.length > 0
@@ -47,12 +64,51 @@ export function runCheck(options: RunOptions): HealthReport {
 
     const { perServer, findings } = checkConfig(parsed);
 
-    if (parsed.format === "unknown" || parsed.servers.length === 0) {
-      const status: Severity = findings.some((f) => f.severity === "fail")
+    if (parsed.format === "none" || parsed.format === "unknown") {
+      let status: Severity = findings.some((f) => f.severity === "fail")
         ? "fail"
         : findings.some((f) => f.severity === "warn")
           ? "warn"
           : "ok";
+
+      // Optional client settings without MCP section → soft skip
+      if (
+        parsed.format === "none" &&
+        isOptionalMcpFile(path) &&
+        findings.every((f) => f.code === "NO_MCP_SECTION")
+      ) {
+        status = "ok";
+        servers.push({
+          name: "(skipped)",
+          file: path,
+          transport: "unknown",
+          status: "ok",
+          findings: [
+            {
+              severity: "ok",
+              code: "SKIPPED_NO_MCP",
+              message: "No mcpServers section (ok for client settings files)",
+              file: path,
+            },
+          ],
+        });
+        continue;
+      }
+
+      servers.push({
+        name: "(config)",
+        file: path,
+        transport: "unknown",
+        status,
+        findings,
+      });
+      continue;
+    }
+
+    if (parsed.servers.length === 0) {
+      const status: Severity = findings.some((f) => f.severity === "fail")
+        ? "fail"
+        : "warn";
       servers.push({
         name: "(config)",
         file: path,
@@ -66,8 +122,56 @@ export function runCheck(options: RunOptions): HealthReport {
     for (const server of parsed.servers) {
       const result = perServer.get(server.name) ?? {
         status: "ok" as const,
-        findings: [],
+        findings: [] as Finding[],
       };
+
+      if (options.online && server.transport.kind === "stdio") {
+        const pkg = extractNpxPackage(
+          server.transport.command,
+          server.transport.args,
+        );
+        if (pkg) {
+          const { name, version } = splitPackageSpec(pkg);
+          const latest = await fetchNpmLatest(name);
+          if (!latest.ok) {
+            result.findings.push({
+              severity: "warn",
+              code: "NPM_LOOKUP_FAILED",
+              message: latest.error,
+              server: server.name,
+              file: path,
+            });
+            result.status = worst(result.status, "warn");
+          } else if (!version) {
+            result.findings.push({
+              severity: "warn",
+              code: "NPM_LATEST",
+              message: `Unpinned; npm latest is ${latest.latest} (pin ${name}@${latest.latest})`,
+              server: server.name,
+              file: path,
+            });
+            result.status = worst(result.status, "warn");
+          } else if (isVersionDrift(version, latest.latest)) {
+            result.findings.push({
+              severity: "warn",
+              code: "NPM_DRIFT",
+              message: `Pinned ${version} but npm latest is ${latest.latest}`,
+              server: server.name,
+              file: path,
+            });
+            result.status = worst(result.status, "warn");
+          } else {
+            result.findings.push({
+              severity: "ok",
+              code: "NPM_CURRENT",
+              message: `Pinned ${version} matches npm latest`,
+              server: server.name,
+              file: path,
+            });
+          }
+        }
+      }
+
       servers.push({
         name: server.name,
         file: path,
@@ -89,7 +193,7 @@ export function runCheck(options: RunOptions): HealthReport {
           severity: "warn",
           code: "NO_CONFIG",
           message:
-            "No MCP config files found (.cursor/mcp.json, mcp.json, .mcp.json, .vscode/mcp.json)",
+            "No MCP config files found (Cursor/Claude/VS Code project or user paths)",
           file: root,
         },
       ],

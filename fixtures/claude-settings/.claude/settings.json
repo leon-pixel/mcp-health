@@ -1,0 +1,10 @@
+{
+  "theme": "dark",
+  "permissions": {},
+  "mcpServers": {
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory@0.6.2"]
+    }
+  }
+}

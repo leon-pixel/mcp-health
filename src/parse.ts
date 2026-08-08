@@ -75,5 +75,19 @@ export function parseConfigFile(path: string): ConfigFile {
     };
   }
 
+  if (json !== null && typeof json === "object" && !Array.isArray(json)) {
+    return { path, format: "none", servers: [] };
+  }
+
   return { path, format: "unknown", servers: [] };
+}
+
+/** Settings-style files may exist without an MCP section — don't hard-fail. */
+export function isOptionalMcpFile(path: string): boolean {
+  const normalized = path.replace(/\\/g, "/");
+  return (
+    normalized.endsWith("/settings.json") ||
+    normalized.endsWith("/settings.local.json") ||
+    normalized.endsWith("/claude_desktop_config.json")
+  );
 }

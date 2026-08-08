@@ -10,7 +10,7 @@ program
   .description(
     "Scan MCP server configs and report health, missing commands, and unpinned packages",
   )
-  .version("0.1.0");
+  .version("0.2.0");
 
 program
   .command("check")
@@ -18,16 +18,27 @@ program
   .argument("[root]", "Project root to scan", ".")
   .option("-f, --file <path>", "Specific config file (repeatable)", collect, [])
   .option("--json", "Print JSON report", false)
-  .option("--no-user", "Ignore ~/.cursor/mcp.json outside the project")
+  .option("--no-user", "Ignore user-level Cursor/Claude Desktop configs")
+  .option(
+    "--online",
+    "Query npm registry for package drift (network required)",
+    false,
+  )
   .action(
-    (
+    async (
       root: string,
-      opts: { file: string[]; json?: boolean; user?: boolean },
+      opts: {
+        file: string[];
+        json?: boolean;
+        user?: boolean;
+        online?: boolean;
+      },
     ) => {
-      const report = runCheck({
+      const report = await runCheck({
         root,
         files: opts.file.length ? opts.file : undefined,
         includeUserConfig: opts.user !== false,
+        online: Boolean(opts.online),
       });
 
       process.stdout.write(opts.json ? formatJson(report) : formatHuman(report));
@@ -39,4 +50,4 @@ function collect(value: string, previous: string[]): string[] {
   return previous.concat([value]);
 }
 
-program.parse();
+await program.parseAsync(process.argv);
