@@ -1,6 +1,6 @@
 {
   "name": "@leon-pixel/mcp-health",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "CLI that scans MCP server configs and reports health, versions, and broken entries",
   "main": "./dist/index.js",
   "scripts": {
@@ -48,6 +48,7 @@
   "dependencies": {
     "commander": "^15.0.0",
     "semver": "^7.8.5",
+    "smol-toml": "^1.9.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {

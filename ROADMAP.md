@@ -20,15 +20,19 @@ It is not a registry UI and not a hosted dashboard. It is a config scan plus an 
 
 0.1.0 through 1.0.0 were cut on the same day as the initial public commits. See the changelog.
 
+## Shipped in 1.2.0
+
+| # | Capability | Status |
+|---|------------|--------|
+| 1 | `tools/list` during `--probe`, with `EMPTY_TOOLS` as a warning | Shipped |
+| 2 | Windsurf, Zed, and Codex project and user config paths | Shipped |
+| 3 | SARIF 2.1.0 and GitHub Actions annotations | Shipped. Code scanning upload is opt-in |
+| 4 | README demo and a comparison with Inspector, MCP Doctor, and mcp-healthcheck | Shipped |
+
 ## Next
 
 - Publish `@leon-pixel/mcp-health` by adding `NPM_TOKEN` and tagging a stable release
 - List the Action on the GitHub Marketplace from that release
-- `tools/list` probe for servers that expose no tools
-- SARIF output and pull request annotations
-- Windsurf, Zed, and Codex config paths
-- A short demo recording in the README
-- A comparison with MCP Inspector and other MCP doctor or liveness tools
 
 ## Out of scope
 

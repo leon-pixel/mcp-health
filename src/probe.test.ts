@@ -39,8 +39,10 @@ describe("stdio probe", () => {
         probeTimeoutMs: 4000,
       });
       expect(report.summary.fail).toBe(0);
+      expect(report.summary.warn).toBe(0);
       const codes = report.servers.flatMap((s) => s.findings.map((f) => f.code));
       expect(codes).toContain("PROBE_OK");
+      expect(codes).toContain("TOOLS_OK");
     } finally {
       delete process.env.MCP_HEALTH_MARK_SRC;
     }
@@ -54,8 +56,10 @@ describe("stdio probe", () => {
       probeTimeoutMs: 4000,
     });
     expect(report.summary.fail).toBe(0);
+    expect(report.summary.warn).toBe(0);
     const codes = report.servers.flatMap((s) => s.findings.map((f) => f.code));
     expect(codes).toContain("PROBE_OK");
+    expect(codes).toContain("TOOLS_OK");
   });
 
   it("fails as soon as the server process exits", async () => {
@@ -84,8 +88,10 @@ describe("stdio probe", () => {
       probeTimeoutMs: 4000,
     });
     expect(report.summary.fail).toBe(0);
+    expect(report.summary.warn).toBe(0);
     const codes = report.servers.flatMap((s) => s.findings.map((f) => f.code));
     expect(codes).toContain("PROBE_OK");
+    expect(codes).toContain("TOOLS_OK");
     expect(codes).not.toContain("PROBE_INIT_ERROR");
     expect(codes).not.toContain("PROBE_FAILED");
   });
@@ -98,10 +104,57 @@ describe("stdio probe", () => {
       probeTimeoutMs: 4000,
     });
     expect(report.summary.fail).toBe(0);
-    const ok = report.servers
-      .flatMap((s) => s.findings)
-      .find((f) => f.code === "PROBE_OK");
+    expect(report.summary.warn).toBe(0);
+    const findings = report.servers.flatMap((s) => s.findings);
+    const ok = findings.find((f) => f.code === "PROBE_OK");
     expect(ok?.message).toMatch(/discover/);
+    expect(findings.map((f) => f.code)).toContain("TOOLS_OK");
+  });
+
+  it("warns on an empty tool list and on tools/list errors, and stays quiet with --no-tools", async () => {
+    const report = await runCheck({
+      root: join(fixtures, "probe-tools"),
+      includeUserConfig: false,
+      probe: true,
+      probeTimeoutMs: 4000,
+    });
+    const byName = new Map(report.servers.map((server) => [server.name, server]));
+    const codes = (name: string) => byName.get(name)?.findings.map((f) => f.code) ?? [];
+
+    expect(byName.get("with-tools")?.status).toBe("ok");
+    expect(codes("with-tools")).toEqual(
+      expect.arrayContaining(["PROBE_OK", "TOOLS_OK", "HEALTHY"]),
+    );
+    expect(codes("with-tools")).not.toContain("EMPTY_TOOLS");
+
+    expect(byName.get("no-tools")?.status).toBe("warn");
+    expect(codes("no-tools")).toContain("EMPTY_TOOLS");
+    expect(codes("no-tools")).toContain("PROBE_OK");
+    expect(codes("no-tools")).not.toContain("HEALTHY");
+
+    expect(byName.get("tools-error")?.status).toBe("warn");
+    expect(codes("tools-error")).toContain("TOOLS_LIST_FAILED");
+    expect(codes("tools-error")).not.toContain("PROBE_FAILED");
+    expect(byName.get("tools-error")?.status).not.toBe("fail");
+
+    expect(JSON.stringify(report)).not.toContain("super-secret-tool-token");
+    expect(report.summary.fail).toBe(0);
+
+    const skipped = await runCheck({
+      root: join(fixtures, "probe-tools"),
+      includeUserConfig: false,
+      probe: true,
+      probeListTools: false,
+      probeTimeoutMs: 4000,
+    });
+    const skippedCodes = skipped.servers.flatMap((s) => s.findings.map((f) => f.code));
+    expect(skippedCodes).toContain("PROBE_OK");
+    expect(skippedCodes).not.toContain("EMPTY_TOOLS");
+    expect(skippedCodes).not.toContain("TOOLS_LIST_FAILED");
+    expect(skippedCodes).not.toContain("TOOLS_OK");
+    expect(skipped.summary.fail).toBe(0);
+    expect(skipped.summary.warn).toBe(0);
+    expect(skipped.servers.every((server) => server.status === "ok")).toBe(true);
   });
 });
 
@@ -132,7 +185,20 @@ describe("http probe", () => {
           send(res, 401, "unauthorized", "text/plain");
           return;
         }
-        const payload = JSON.parse(body) as { id?: number };
+        const payload = JSON.parse(body) as { id?: number; method?: string };
+        if (payload.method === "tools/list") {
+          send(
+            res,
+            200,
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: payload.id ?? 3,
+              result: { tools: [{ name: "echo" }] },
+            }),
+            "application/json",
+          );
+          return;
+        }
         const sse = [
           "event: message",
           "data: ",
@@ -191,6 +257,19 @@ describe("http probe", () => {
           );
           return;
         }
+        if (payload.method === "tools/list") {
+          send(
+            res,
+            200,
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: payload.id ?? 3,
+              result: { tools: [{ name: "echo" }] },
+            }),
+            "application/json",
+          );
+          return;
+        }
       }
       send(res, 500, "unhandled", "text/plain");
     });
@@ -237,17 +316,21 @@ describe("http probe", () => {
 
       expect(codes("no-auth")).toContain("PROBE_HTTP_AUTH");
       expect(codes("no-auth")).not.toContain("PROBE_HTTP_REACHABLE");
+      expect(codes("no-auth")).not.toContain("TOOLS_LIST_FAILED");
       expect(codes("no-auth")).not.toContain("HEALTHY");
       expect(byName.get("no-auth")?.status).toBe("fail");
 
       expect(codes("authed")).toContain("PROBE_OK");
+      expect(codes("authed")).toContain("TOOLS_OK");
       expect(byName.get("authed")?.status).toBe("ok");
 
       expect(codes("missing")).toContain("PROBE_HTTP_REACHABLE");
       expect(codes("missing")).not.toContain("HEALTHY");
+      expect(codes("missing")).not.toContain("TOOLS_OK");
       expect(byName.get("missing")?.status).toBe("warn");
 
       expect(codes("modern")).toContain("PROBE_OK");
+      expect(codes("modern")).toContain("TOOLS_OK");
       expect(
         byName.get("modern")?.findings.find((f) => f.code === "PROBE_OK")?.message,
       ).toMatch(/discover/);
@@ -268,8 +351,11 @@ describe("http probe", () => {
       expect(modernCalls.map((entry) => JSON.parse(entry.body).method)).toEqual([
         "initialize",
         "server/discover",
+        "tools/list",
       ]);
       expect(modernCalls[1]?.protocol).toBe("2026-07-28");
+      expect(modernCalls[2]?.protocol).toBe("2026-07-28");
+      expect(seen.filter((entry) => entry.url === "/deny")).toHaveLength(1);
     } finally {
       delete process.env.MCP_HEALTH_HTTP_TOKEN;
       rmSync(dir, { recursive: true, force: true });

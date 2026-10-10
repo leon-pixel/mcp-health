@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { resolve, dirname, join } from "node:path";
@@ -76,6 +76,9 @@ describe("isVersionDrift", () => {
 describe("discoverConfigPaths", () => {
   it("exposes project candidates including claude settings", () => {
     expect(__testing.PROJECT_CANDIDATES).toContain(".claude/settings.json");
+    expect(__testing.PROJECT_CANDIDATES).toContain(".windsurf/mcp_config.json");
+    expect(__testing.PROJECT_CANDIDATES).toContain(".zed/settings.json");
+    expect(__testing.PROJECT_CANDIDATES).toContain(".codex/config.toml");
     expect(__testing.claudeDesktopPaths().length).toBeGreaterThan(0);
   });
 
@@ -84,6 +87,29 @@ describe("discoverConfigPaths", () => {
       includeUserConfig: false,
     });
     expect(found.some((p) => p.endsWith(".cursor/mcp.json"))).toBe(true);
+  });
+
+  it("lists Windsurf, Zed, and Codex user paths and skips them with --no-user", () => {
+    const normalized = __testing.userLevelPaths().map((p) => p.replace(/\\/g, "/"));
+    expect(
+      normalized.some((p) => p.endsWith("/.codeium/windsurf/mcp_config.json")),
+    ).toBe(true);
+    expect(normalized.some((p) => p.endsWith("/devin/mcp_config.json"))).toBe(true);
+    expect(
+      normalized.some(
+        (p) => p.endsWith("/zed/settings.json") || p.endsWith("/Zed/settings.json"),
+      ),
+    ).toBe(true);
+    expect(normalized.some((p) => p.endsWith("/.codex/config.toml"))).toBe(true);
+
+    const empty = mkdtempSync(join(tmpdir(), "mcp-health-empty-"));
+    try {
+      expect(
+        discoverConfigPaths(empty, { includeUserConfig: false }),
+      ).toEqual([]);
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
   });
 });
 
@@ -97,6 +123,31 @@ describe("parseConfigFile", () => {
       "filesystem",
       "remote-demo",
     ]);
+  });
+
+  it("parses Windsurf serverUrl, Zed command objects, and Codex tables", () => {
+    const windsurf = parseConfigFile(
+      join(fixtures, "windsurf", ".windsurf", "mcp_config.json"),
+    );
+    expect(windsurf.format).toBe("mcpServers");
+    expect(windsurf.servers[0]).toMatchObject({
+      name: "cascade",
+      transport: { kind: "http", url: "https://example.com/mcp" },
+    });
+
+    const zed = parseConfigFile(join(fixtures, "zed", ".zed", "settings.json"));
+    expect(zed.format).toBe("contextServers");
+    expect(zed.servers[0]).toMatchObject({
+      name: "zed-local",
+      transport: { kind: "stdio", command: "node", args: ["--version"] },
+    });
+
+    const codex = parseConfigFile(join(fixtures, "codex", ".codex", "config.toml"));
+    expect(codex.format).toBe("codex");
+    expect(codex.servers[0]).toMatchObject({
+      name: "remote",
+      transport: { kind: "http", url: "https://example.com/mcp" },
+    });
   });
 
   it("keeps HTTP headers on the parsed server", () => {
@@ -150,8 +201,56 @@ describe("runCheck", () => {
       probeTimeoutMs: 5000,
     });
     expect(report.summary.fail).toBe(0);
+    expect(report.summary.warn).toBe(0);
     const codes = report.servers.flatMap((s) => s.findings.map((f) => f.code));
     expect(codes).toContain("PROBE_OK");
+    expect(codes).toContain("TOOLS_OK");
+    expect(report.servers.every((server) => server.status === "ok")).toBe(true);
+  });
+
+  it("scans Windsurf, Zed, and Codex project configs", async () => {
+    for (const name of ["windsurf", "zed", "codex"] as const) {
+      const root = join(fixtures, name);
+      const found = discoverConfigPaths(root, { includeUserConfig: false });
+      expect(found.every((p) => p.startsWith(root))).toBe(true);
+      expect(found.length).toBeGreaterThan(0);
+      const report = await runCheck({ root, includeUserConfig: false });
+      expect(report.summary.fail).toBe(0);
+      expect(report.summary.warn).toBe(0);
+      const codes = report.servers.flatMap((s) => s.findings.map((f) => f.code));
+      expect(codes).toContain("HEALTHY");
+      expect(codes).not.toContain("NO_CONFIG");
+      expect(codes).not.toContain("NO_TRANSPORT");
+      expect(codes).not.toContain("COMMAND_NOT_FOUND");
+    }
+  });
+
+  it("treats a missing config and a Codex file without mcp_servers as non-failures", async () => {
+    const empty = mkdtempSync(join(tmpdir(), "mcp-health-missing-"));
+    const codex = mkdtempSync(join(tmpdir(), "mcp-health-codex-"));
+    try {
+      const missing = await runCheck({
+        root: empty,
+        includeUserConfig: false,
+      });
+      expect(missing.servers[0]?.findings.map((f) => f.code)).toEqual(["NO_CONFIG"]);
+      expect(missing.summary.fail).toBe(0);
+
+      const file = join(codex, ".codex", "config.toml");
+      mkdirSync(join(codex, ".codex"), { recursive: true });
+      writeFileSync(file, 'model = "gpt-5"\n');
+      const skipped = await runCheck({
+        root: codex,
+        includeUserConfig: false,
+      });
+      expect(skipped.servers[0]?.findings.map((f) => f.code)).toEqual([
+        "SKIPPED_NO_MCP",
+      ]);
+      expect(skipped.summary.fail).toBe(0);
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+      rmSync(codex, { recursive: true, force: true });
+    }
   });
 
   it("reports a schema error for a numeric env value", async () => {

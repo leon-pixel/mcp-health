@@ -1,0 +1,10 @@
+{
+  "context_servers": {
+    "zed-local": {
+      "command": {
+        "path": "node",
+        "args": ["--version"]
+      }
+    }
+  }
+}

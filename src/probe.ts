@@ -45,6 +45,23 @@ function initializeRequest(): Record<string, unknown> {
   };
 }
 
+function toolsListRequest(modern: boolean): Record<string, unknown> {
+  const params: Record<string, unknown> = {};
+  if (modern) {
+    params._meta = {
+      "io.modelcontextprotocol/protocolVersion": MODERN_PROTOCOL_VERSION,
+      "io.modelcontextprotocol/clientInfo": clientInfo(),
+      "io.modelcontextprotocol/clientCapabilities": {},
+    };
+  }
+  return {
+    jsonrpc: "2.0",
+    id: 3,
+    method: "tools/list",
+    params,
+  };
+}
+
 function discoverRequest(): Record<string, unknown> {
   return {
     jsonrpc: "2.0",
@@ -225,6 +242,72 @@ function finding(
   };
 }
 
+function toolsFinding(
+  message: RpcMessage | undefined,
+  server: ParsedServer,
+  file: string,
+  fallback: string,
+): Finding {
+  if (!message) {
+    return {
+      severity: "warn",
+      code: "TOOLS_LIST_FAILED",
+      message: fallback,
+      server: server.name,
+      file,
+    };
+  }
+  if (message.error) {
+    return {
+      severity: "warn",
+      code: "TOOLS_LIST_FAILED",
+      message: `tools/list error: ${message.error.message ?? "unknown"}`,
+      server: server.name,
+      file,
+    };
+  }
+  const result = message.result;
+  const tools =
+    result &&
+    typeof result === "object" &&
+    !Array.isArray(result) &&
+    Array.isArray((result as { tools?: unknown }).tools)
+      ? (result as { tools: unknown[] }).tools
+      : undefined;
+  if (!tools) {
+    return {
+      severity: "warn",
+      code: "TOOLS_LIST_FAILED",
+      message: "tools/list result has no tools array",
+      server: server.name,
+      file,
+    };
+  }
+  if (tools.length === 0) {
+    return {
+      severity: "warn",
+      code: "EMPTY_TOOLS",
+      message: "Server exposes no tools",
+      server: server.name,
+      file,
+    };
+  }
+  return {
+    severity: "ok",
+    code: "TOOLS_OK",
+    message: `Server exposes ${tools.length} tool${tools.length === 1 ? "" : "s"}`,
+    server: server.name,
+    file,
+  };
+}
+
+function withTools(base: ProbeResult, extra: Finding): ProbeResult {
+  return {
+    status: worst(base.status, extra.severity),
+    findings: [...base.findings, extra],
+  };
+}
+
 function fromRpc(
   response: RpcMessage,
   server: ParsedServer,
@@ -254,7 +337,7 @@ function fromRpc(
 
 export async function probeStdioServer(
   server: ParsedServer,
-  options: { timeoutMs: number; file: string; cwd?: string },
+  options: { timeoutMs: number; file: string; cwd?: string; listTools?: boolean },
 ): Promise<ProbeResult> {
   if (server.transport.kind !== "stdio") {
     return { status: "ok", findings: [] };
@@ -311,18 +394,7 @@ export async function probeStdioServer(
       response = await reader.waitFor(2, remaining());
     }
 
-    if (!response.error && response.result !== undefined && !viaDiscover) {
-      try {
-        child.stdin?.write(
-          `${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`,
-        );
-        child.stdin?.end();
-      } catch {
-        /* ignore */
-      }
-    }
-
-    return fromRpc(
+    const base = fromRpc(
       response,
       server,
       options.file,
@@ -330,6 +402,49 @@ export async function probeStdioServer(
         ? "stdio server/discover handshake succeeded"
         : "stdio initialize handshake succeeded",
     );
+    if (base.status !== "ok") return base;
+
+    if (!viaDiscover) {
+      try {
+        child.stdin?.write(
+          `${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`,
+        );
+      } catch {
+        /* ignore */
+      }
+    }
+
+    if (options.listTools === false) {
+      try {
+        child.stdin?.end();
+      } catch {
+        /* ignore */
+      }
+      return base;
+    }
+
+    try {
+      write(toolsListRequest(viaDiscover));
+      const toolsResponse = await reader.waitFor(3, remaining());
+      try {
+        child.stdin?.end();
+      } catch {
+        /* ignore */
+      }
+      return withTools(
+        base,
+        toolsFinding(toolsResponse, server, options.file, "tools/list returned no message"),
+      );
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      return withTools(base, {
+        severity: "warn",
+        code: "TOOLS_LIST_FAILED",
+        message: detail,
+        server: server.name,
+        file: options.file,
+      });
+    }
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     const stderrHint = stderr.trim()
@@ -574,9 +689,54 @@ function httpOutcome(
   );
 }
 
+async function withHttpTools(
+  base: ProbeResult,
+  server: ParsedServer,
+  options: { timeoutMs: number; file: string; listTools?: boolean },
+  modern: boolean,
+  remaining: () => number,
+): Promise<ProbeResult> {
+  if (base.status !== "ok" || options.listTools === false) return base;
+  if (server.transport.kind !== "http") return base;
+  try {
+    const exchange = await postJson(
+      server.transport.url,
+      toolsListRequest(modern),
+      requestHeaders(server, modern ? MODERN_PROTOCOL_VERSION : LEGACY_PROTOCOL_VERSION),
+      remaining(),
+    );
+    if (exchange.status === 401 || exchange.status === 403) {
+      return withTools(base, {
+        severity: "warn",
+        code: "TOOLS_LIST_FAILED",
+        message: `tools/list unauthorized (${exchange.status})`,
+        server: server.name,
+        file: options.file,
+      });
+    }
+    return withTools(
+      base,
+      toolsFinding(
+        exchange.message,
+        server,
+        options.file,
+        `tools/list returned HTTP ${exchange.status} without a tools array`,
+      ),
+    );
+  } catch (err) {
+    return withTools(base, {
+      severity: "warn",
+      code: "TOOLS_LIST_FAILED",
+      message: err instanceof Error ? err.message : String(err),
+      server: server.name,
+      file: options.file,
+    });
+  }
+}
+
 export async function probeHttpServer(
   server: ParsedServer,
-  options: { timeoutMs: number; file: string },
+  options: { timeoutMs: number; file: string; listTools?: boolean },
 ): Promise<ProbeResult> {
   if (server.transport.kind !== "http") {
     return { status: "ok", findings: [] };
@@ -608,12 +768,18 @@ export async function probeHttpServer(
         remaining(),
       );
       if (discovered.message?.result !== undefined) {
-        return finding(
-          "ok",
-          "PROBE_OK",
-          `HTTP server/discover handshake succeeded (${discovered.status})`,
-          server.name,
-          options.file,
+        return withHttpTools(
+          finding(
+            "ok",
+            "PROBE_OK",
+            `HTTP server/discover handshake succeeded (${discovered.status})`,
+            server.name,
+            options.file,
+          ),
+          server,
+          options,
+          true,
+          remaining,
         );
       }
       if (discovered.status === 401 || discovered.status === 403) {
@@ -622,7 +788,13 @@ export async function probeHttpServer(
       if (!exchange.message?.error) exchange = discovered;
     }
 
-    return httpOutcome(exchange, server, options.file);
+    return withHttpTools(
+      httpOutcome(exchange, server, options.file),
+      server,
+      options,
+      false,
+      remaining,
+    );
   } catch (err) {
     return finding(
       "fail",
@@ -636,7 +808,7 @@ export async function probeHttpServer(
 
 export async function probeServer(
   server: ParsedServer,
-  options: { timeoutMs: number; file: string; cwd?: string },
+  options: { timeoutMs: number; file: string; cwd?: string; listTools?: boolean },
 ): Promise<ProbeResult> {
   if (server.transport.kind === "stdio") {
     return probeStdioServer(server, options);

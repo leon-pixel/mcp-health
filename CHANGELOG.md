@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-10-10
+
+### Added
+
+- After a successful `--probe` handshake, call `tools/list`. An empty catalog is `EMPTY_TOOLS` (a warning). A tools/list error or timeout is `TOOLS_LIST_FAILED` (a warning). `--no-tools` skips the call. A catalog with at least one tool stays successful.
+- Discover Windsurf (`.windsurf/mcp_config.json` and `serverUrl`), Zed (`.zed/settings.json` `context_servers`, including a command object), and Codex (`.codex/config.toml` `[mcp_servers.<name>]`). User-level paths for those clients are included unless `--no-user` is set. A missing file, or a Codex config with no `mcp_servers` table, is not a failure.
+- `--sarif <file>` writes SARIF 2.1.0 for warn and fail findings. `--github-annotations` prints `::warning` and `::error` on stderr. The GitHub Action emits annotations and writes `mcp-health.sarif` by default, and uploads that file only when `upload-sarif` is `true`.
+
 ## [1.1.0] - 2026-10-10
 
 ### Fixed
