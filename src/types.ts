@@ -13,7 +13,14 @@ export type ParsedServer = {
 
 export type ConfigFile = {
   path: string;
-  format: "mcpServers" | "servers" | "none" | "unknown" | "invalid";
+  format:
+    | "mcpServers"
+    | "servers"
+    | "contextServers"
+    | "codex"
+    | "none"
+    | "unknown"
+    | "invalid";
   servers: ParsedServer[];
   /** Set when format is "invalid". */
   error?: string;

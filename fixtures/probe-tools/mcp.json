@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "with-tools": {
+      "command": "node",
+      "args": ["with-tools.mjs"],
+      "env": {
+        "MCP_HEALTH_SECRET": "super-secret-tool-token"
+      }
+    },
+    "no-tools": {
+      "command": "node",
+      "args": ["no-tools.mjs"]
+    },
+    "tools-error": {
+      "command": "node",
+      "args": ["tools-error.mjs"]
+    }
+  }
+}

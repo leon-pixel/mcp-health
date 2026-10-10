@@ -40,5 +40,16 @@ rl.on("line", (line) => {
         },
       })}\n`,
     );
+    return;
+  }
+
+  if (msg?.method === "tools/list") {
+    process.stdout.write(
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        id: msg.id ?? 3,
+        result: { tools: [{ name: "echo", description: "fixture tool" }] },
+      })}\n`,
+    );
   }
 });

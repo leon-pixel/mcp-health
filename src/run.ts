@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { discoverConfigPaths } from "./discover.js";
-import { isOptionalMcpFile, parseConfigFile } from "./parse.js";
+import { configHasServers, isOptionalMcpFile, parseConfigFile } from "./parse.js";
 import { checkConfig, extractNpxPackage } from "./check.js";
 import {
   fetchNpmLatest,
@@ -34,6 +34,8 @@ export type RunOptions = {
   /** Attempt MCP initialize handshake. */
   probe?: boolean;
   probeTimeoutMs?: number;
+  /** With probe, call tools/list. Defaults to true. */
+  probeListTools?: boolean;
 };
 
 export async function runCheck(options: RunOptions): Promise<HealthReport> {
@@ -72,7 +74,7 @@ export async function runCheck(options: RunOptions): Promise<HealthReport> {
       continue;
     }
 
-    if (parsed.format === "mcpServers" || parsed.format === "servers") {
+    if (configHasServers(parsed.format)) {
       parsed = {
         ...parsed,
         servers: parsed.servers.map((server) =>
@@ -109,7 +111,7 @@ export async function runCheck(options: RunOptions): Promise<HealthReport> {
             {
               severity: "ok",
               code: "SKIPPED_NO_MCP",
-              message: "No mcpServers section (ok for client settings files)",
+              message: "No MCP server section (ok for client settings files)",
               file: path,
             },
           ],
@@ -205,6 +207,7 @@ export async function runCheck(options: RunOptions): Promise<HealthReport> {
           timeoutMs: probeTimeoutMs,
           file: path,
           cwd: root,
+          listTools: options.probeListTools !== false,
         });
         result.findings.push(...probed.findings);
         result.status = worst(result.status, probed.status);
@@ -244,7 +247,7 @@ export async function runCheck(options: RunOptions): Promise<HealthReport> {
           severity: "warn",
           code: "NO_CONFIG",
           message:
-            "No MCP config files found (Cursor/Claude/VS Code project or user paths)",
+            "No MCP config files found (Cursor, VS Code, Claude, Windsurf, Zed, or Codex project or user paths)",
           file: root,
         },
       ],

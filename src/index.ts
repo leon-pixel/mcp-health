@@ -1,6 +1,6 @@
 export { probeServer, probeStdioServer, probeHttpServer } from "./probe.js";
 export { discoverConfigPaths } from "./discover.js";
-export { parseConfigFile, isOptionalMcpFile } from "./parse.js";
+export { parseConfigFile, isOptionalMcpFile, configHasServers } from "./parse.js";
 export {
   checkConfig,
   isVersionPinned,
@@ -10,6 +10,7 @@ export {
 } from "./check.js";
 export { expandServerVariables, expandString } from "./vars.js";
 export { runCheck } from "./run.js";
+export { buildSarif, formatAnnotations } from "./sarif.js";
 export { formatHuman, formatJson, exitCode } from "./report.js";
 export {
   fetchNpmLatest,

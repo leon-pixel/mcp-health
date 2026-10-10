@@ -1,7 +1,10 @@
 #!/usr/bin/env node
+import { writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { Command } from "commander";
 import { runCheck } from "./run.js";
 import { exitCode, formatHuman, formatJson } from "./report.js";
+import { buildSarif, formatAnnotations } from "./sarif.js";
 import { VERSION } from "./version.js";
 
 const program = new Command();
@@ -36,6 +39,16 @@ program
     (v) => Number(v),
     8000,
   )
+  .option("--no-tools", "With --probe, skip tools/list")
+  .option(
+    "--sarif <file>",
+    "Write warn and fail findings as SARIF 2.1.0",
+  )
+  .option(
+    "--github-annotations",
+    "Print GitHub Actions annotations on stderr",
+    false,
+  )
   .action(
     async (
       root: string,
@@ -46,6 +59,9 @@ program
         online?: boolean;
         probe?: boolean;
         probeTimeout?: number;
+        tools?: boolean;
+        sarif?: string;
+        githubAnnotations?: boolean;
       },
     ) => {
       const report = await runCheck({
@@ -55,7 +71,18 @@ program
         online: Boolean(opts.online),
         probe: Boolean(opts.probe),
         probeTimeoutMs: opts.probeTimeout,
+        probeListTools: opts.tools !== false,
       });
+
+      if (opts.sarif) {
+        writeFileSync(
+          resolve(opts.sarif),
+          `${JSON.stringify(buildSarif(report), null, 2)}\n`,
+        );
+      }
+      if (opts.githubAnnotations) {
+        process.stderr.write(formatAnnotations(report));
+      }
 
       process.stdout.write(opts.json ? formatJson(report) : formatHuman(report));
       process.exitCode = exitCode(report);

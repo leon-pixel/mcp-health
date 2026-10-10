@@ -19,11 +19,26 @@ inputs:
     description: Node.js version
     required: false
     default: "20"
+  annotations:
+    description: Emit GitHub Actions warning and error annotations for findings
+    required: false
+    default: "true"
+  sarif-file:
+    description: SARIF 2.1.0 path to write, relative to the job workspace. Set to false to skip the file.
+    required: false
+    default: mcp-health.sarif
+  upload-sarif:
+    description: Upload the SARIF file with github/codeql-action/upload-sarif. The job needs security-events write, and the repository needs code scanning.
+    required: false
+    default: "false"
 
 outputs:
   exit-code:
     description: mcp-health exit code (0 ok, 1 warn, 2 fail)
     value: ${{ steps.run.outputs.exit-code }}
+  sarif-file:
+    description: SARIF path passed to the CLI, when a file was requested
+    value: ${{ steps.run.outputs.sarif-file }}
 
 runs:
   using: composite
@@ -45,8 +60,28 @@ runs:
       shell: bash
       run: |
         set +e
-        node "${{ github.action_path }}/dist/cli.js" check ${{ inputs.args }} "${{ inputs.path }}"
+        flags=()
+        if [ "${{ inputs.annotations }}" = "true" ]; then
+          flags+=(--github-annotations)
+        fi
+        sarif="${{ inputs.sarif-file }}"
+        if [ -n "$sarif" ] && [ "$sarif" != "false" ]; then
+          flags+=(--sarif "$sarif")
+          echo "sarif-file=$sarif" >> "$GITHUB_OUTPUT"
+        fi
+        node "${{ github.action_path }}/dist/cli.js" check "${flags[@]}" ${{ inputs.args }} "${{ inputs.path }}"
         code=$?
-        set -e
         echo "exit-code=$code" >> "$GITHUB_OUTPUT"
-        exit "$code"
+        # Leave this step green so a later upload can still run. The last step restores the code.
+        exit 0
+
+    - name: Upload SARIF
+      if: ${{ always() && inputs.upload-sarif == 'true' && steps.run.outputs.sarif-file != '' }}
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ steps.run.outputs.sarif-file }}
+
+    - name: Propagate mcp-health exit code
+      if: ${{ always() }}
+      shell: bash
+      run: exit ${{ steps.run.outputs.exit-code }}

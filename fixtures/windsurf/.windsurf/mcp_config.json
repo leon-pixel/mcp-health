@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "cascade": {
+      "serverUrl": "https://example.com/mcp"
+    }
+  }
+}
