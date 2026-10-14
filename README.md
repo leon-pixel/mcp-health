@@ -73,7 +73,7 @@ jobs:
           args: --no-user
 ```
 
-`v1` is a moving tag. The [release workflow](.github/workflows/release.yml) points it at the latest stable `v1.x.y` release. It currently tracks the published 1.2.1 release and moves again when a newer stable tag is pushed.
+`v1` is a moving tag. The [release workflow](.github/workflows/release.yml) points it at the latest stable `v1.x.y` release. It currently tracks the published 1.3.0 release and moves again when a newer stable tag is pushed.
 
 The action is listed on the Marketplace as [mcp-health-doctor](https://github.com/marketplace/actions/mcp-health-doctor). `uses: leon-pixel/mcp-health@v1` installs that listing.
 
@@ -217,7 +217,7 @@ mcp-health reads the MCP config files already in a repo (and, unless you pass `-
 
 ## Releases
 
-`@leon-pixel/mcp-health@1.2.1` is the current npm `latest`. The Marketplace listing is [mcp-health-doctor](https://github.com/marketplace/actions/mcp-health-doctor). This repository is `1.3.0` in `package.json`. Pushing the tag `v1.3.0` publishes that version and moves `v1`.
+`@leon-pixel/mcp-health@1.3.0` is the current npm `latest`. The Marketplace listing is [mcp-health-doctor](https://github.com/marketplace/actions/mcp-health-doctor). This repository is `1.3.0` in `package.json`, and the `v1.3.0` tag is published and `v1` points to it.
 
 Pushing a stable tag `vX.Y.Z` that matches `version` in `package.json` runs [`.github/workflows/release.yml`](.github/workflows/release.yml). That workflow:
 
