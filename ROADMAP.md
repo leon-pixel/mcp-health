@@ -43,7 +43,9 @@ Patch release on top of the published 1.2.0 package. IDE input variables and dis
 
 ## Next
 
-`1.3.0` is in `package.json` and is not published yet. npm `latest` and the `v1` Action tag still track the published 1.2.1 release until the tag `v1.3.0` is pushed.
+`1.3.0` is published. npm `latest` and the `v1` Action tag track that release.
+
+Post-1.3.0 work is the gap between a published CLI and a config people trust on the first try: say what a zero-config run found, point command and path failures at the directory the editor uses, and name a fix in the report without writing files.
 
 ## Out of scope
 

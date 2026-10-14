@@ -68,14 +68,16 @@ describe("readme release lines", () => {
     const pkg = require("../package.json") as { version: string };
     const readme = readFileSync(join(repo, "README.md"), "utf8");
     expect(pkg.version).toBe("1.3.0");
-    expect(readme).toContain("tracks the published 1.2.1 release");
+    expect(readme).toContain("tracks the published 1.3.0 release");
     expect(readme).toContain(
-      "`@leon-pixel/mcp-health@1.2.1` is the current npm `latest`.",
+      "`@leon-pixel/mcp-health@1.3.0` is the current npm `latest`.",
     );
-    expect(readme).toContain("This repository is `1.3.0` in `package.json`.");
-    expect(readme).toContain("Pushing the tag `v1.3.0` publishes that version");
+    expect(readme).toContain(
+      "This repository is `1.3.0` in `package.json`, and the `v1.3.0` tag is published and `v1` points to it.",
+    );
+    expect(readme).not.toContain("tracks the published 1.2.1 release");
     expect(readme).not.toContain(
-      "`@leon-pixel/mcp-health@1.3.0` is the current npm `latest`",
+      "`@leon-pixel/mcp-health@1.2.1` is the current npm `latest`",
     );
     expect(readme).toContain("path: services/api");
     expect(readme).toContain("fail-on-missing: true");
