@@ -143,6 +143,12 @@ describe("1.5.0 changelog", () => {
     expect(unreleased).toContain("## [Unreleased]");
     expect(unreleased).toContain("MCP_SERVERS_IGNORED");
     expect(unreleased).toContain("#85");
+    expect(unreleased).toContain("SCRIPT_NOT_FOUND");
+    expect(unreleased).toContain("CODEX_HOME");
+    expect(unreleased).toContain("include-user: true");
+    expect(unreleased).toContain("#86");
+    expect(unreleased).toContain("#87");
+    expect(unreleased).toContain("#89");
     expect(notes).not.toContain("MCP_SERVERS_IGNORED");
     expect(pkg.version).toBe("1.5.0");
     expect(notes.startsWith("## [1.5.0] - 2026-10-22")).toBe(true);

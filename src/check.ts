@@ -1,7 +1,11 @@
 import type { ConfigFile, Finding, ParsedServer, Severity } from "./types.js";
 import { accessSync, constants, existsSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
-import { isVsCodeConfigFile, type LocateOptions } from "./discover.js";
+import {
+  isCopilotUserConfigFile,
+  isVsCodeConfigFile,
+  type LocateOptions,
+} from "./discover.js";
 import { isFloatingPin, splitPackageSpec } from "./npm.js";
 import { CLAUDE_SETTINGS_MCP_SERVERS } from "./parse.js";
 import { isBareEnvToken, lookupEnv } from "./vars.js";
@@ -87,7 +91,8 @@ function findInDir(
 /**
  * Resolve a command the way the host shell would.
  * On Windows, `npx` is `npx.cmd` / `npx.exe` and is found via PATHEXT.
- * A relative command is resolved from `cwd` (the scan root).
+ * A relative command is resolved from `cwd` (the scan root, or a
+ * client `cwd` when that client uses one).
  * On Windows that directory is searched before PATH.
  * An empty PATH entry means that directory on every platform.
  * Returns an absolute path when the command is found.
@@ -236,7 +241,7 @@ export function isExtensionProvided(server: ParsedServer): boolean {
   return settingsObject && server.transport.kind === "unknown";
 }
 
-function collectUnresolved(server: ParsedServer): string[] {
+function collectUnresolved(server: ParsedServer, includeCwd = false): string[] {
   const hits: string[] = [];
   const add = (where: string, value: string) => {
     for (const token of unresolvedTokens(value)) {
@@ -266,6 +271,7 @@ function collectUnresolved(server: ParsedServer): string[] {
   }
 
   if (typeof server.raw.envFile === "string") add("envFile", server.raw.envFile);
+  if (includeCwd && typeof server.raw.cwd === "string") add("cwd", server.raw.cwd);
   return hits;
 }
 
@@ -289,8 +295,9 @@ function unresolvedVariableFinding(
   server: ParsedServer,
   file: string,
   strict: boolean,
+  includeCwd = false,
 ): Finding | undefined {
-  const hits = collectUnresolved(server);
+  const hits = collectUnresolved(server, includeCwd);
   if (hits.length === 0) return undefined;
   const hard = hits.some((hit) => !softUnresolved(hit.slice(0, hit.indexOf(" in "))));
   const severity: Severity = hard || strict ? "fail" : "warn";
@@ -410,6 +417,327 @@ export function extractNpxPackage(command: string, args: string[]): string | und
   }
 
   return explicitFromPackage(rest) ?? firstPackageArg(rest, base);
+}
+
+const INTERPRETERS = new Set(["node", "python", "python3", "bun", "deno", "tsx"]);
+
+/**
+ * Node flags whose next argument is not the script.
+ * `--require ./preload.cjs server.mjs` still checks `server.mjs`.
+ */
+const NODE_VALUE_FLAGS = new Set([
+  "-r",
+  "--require",
+  "--import",
+  "--loader",
+  "--experimental-loader",
+  "--experimental-default-type",
+  "--conditions",
+  "-C",
+  "--inspect",
+  "--inspect-brk",
+  "--inspect-port",
+  "--env-file",
+  "--env-file-if-exists",
+  "--cpu-prof-dir",
+  "--heap-prof-dir",
+  "--diagnostic-dir",
+  "--report-dir",
+  "--report-filename",
+  "--experimental-policy",
+  "--title",
+  "--openssl-config",
+  "--redirect-warnings",
+  "--trace-event-file-pattern",
+  "--watch-path",
+  "--test-reporter",
+  "--test-reporter-destination",
+]);
+
+const NODE_NO_SCRIPT = new Set([
+  "-e",
+  "--eval",
+  "-p",
+  "--print",
+  "-v",
+  "--version",
+  "-h",
+  "--help",
+]);
+
+const PYTHON_VALUE_FLAGS = new Set(["-W", "-X", "--check-hash-based-pycs"]);
+
+const PYTHON_NO_SCRIPT = new Set(["-h", "--help", "-V", "--version", "-"]);
+
+const SCRIPT_EXT = /\.(?:mjs|cjs|js|jsx|ts|tsx|mts|cts|py|pyw)$/i;
+
+function looksLikeScriptPath(arg: string): boolean {
+  if (
+    arg === "." ||
+    arg.startsWith("./") ||
+    arg.startsWith("../") ||
+    arg.startsWith(".\\") ||
+    arg.startsWith("..\\")
+  ) {
+    return true;
+  }
+  if (arg.includes("/") || arg.includes("\\")) return true;
+  return SCRIPT_EXT.test(arg);
+}
+
+/**
+ * First positional argument, or undefined when a flag means there is no script file.
+ * `--` ends flag parsing. `--flag=value` does not consume the next argument.
+ */
+function firstPositional(
+  args: string[],
+  valueFlags: ReadonlySet<string>,
+  stop: ReadonlySet<string>,
+): string | undefined {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === "--") {
+      const next = args[i + 1];
+      return next && !next.startsWith("-") ? next : undefined;
+    }
+    if (stop.has(arg)) return undefined;
+    if (arg.startsWith("--") && arg.includes("=")) {
+      const name = arg.slice(0, arg.indexOf("="));
+      if (stop.has(name)) return undefined;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      if (valueFlags.has(arg)) {
+        const next = args[i + 1];
+        if (next && !next.startsWith("-")) i += 1;
+      }
+      continue;
+    }
+    return arg;
+  }
+  return undefined;
+}
+
+function pythonHasNoScript(args: string[]): boolean {
+  for (const arg of args) {
+    if (arg === "-m" || arg === "--module" || arg.startsWith("--module=")) return true;
+    if (arg === "-c" || (arg.startsWith("-c") && !arg.startsWith("--"))) return true;
+    if (arg.startsWith("-m") && !arg.startsWith("--")) return true;
+  }
+  return false;
+}
+
+function denoScriptArg(args: string[]): string | undefined {
+  const valueFlags = new Set([
+    "--config",
+    "-c",
+    "--import-map",
+    "--lock",
+    "--cert",
+    "--env-file",
+    "--preload",
+  ]);
+  const noFile = new Set([
+    "eval",
+    "repl",
+    "task",
+    "upgrade",
+    "completions",
+    "help",
+    "doc",
+    "lint",
+    "fmt",
+    "install",
+    "uninstall",
+    "cache",
+    "compile",
+    "info",
+    "test",
+    "bench",
+  ]);
+  const fileSub = new Set(["run", "serve", "check"]);
+  let i = 0;
+  for (; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === "--") {
+      const next = args[i + 1];
+      return next;
+    }
+    if (!arg.startsWith("-")) break;
+    if (valueFlags.has(arg)) {
+      const next = args[i + 1];
+      if (next && !next.startsWith("-")) i += 1;
+    }
+  }
+  const sub = args[i];
+  if (!sub) return undefined;
+  if (noFile.has(sub)) return undefined;
+  if (fileSub.has(sub)) {
+    return firstPositional(args.slice(i + 1), valueFlags, new Set(["-h", "--help", "--version"]));
+  }
+  return looksLikeScriptPath(sub) ? sub : undefined;
+}
+
+function bunScriptArg(args: string[]): string | undefined {
+  if (
+    args.includes("-e") ||
+    args.includes("--eval") ||
+    args.some((arg) => arg.startsWith("--eval="))
+  ) {
+    return undefined;
+  }
+  if (
+    args.length > 0 &&
+    args.every((arg) => arg === "--version" || arg === "-v" || arg === "--help" || arg === "-h")
+  ) {
+    return undefined;
+  }
+  const valueFlags = new Set([
+    "--cwd",
+    "--config",
+    "--preload",
+    "--port",
+    "--origin",
+    "--define",
+    "--target",
+    "--outdir",
+    "--outfile",
+    "--external",
+    "--filter",
+    "--env-file",
+    "--bunfile",
+  ]);
+  const notAFile = new Set([
+    "x",
+    "install",
+    "add",
+    "remove",
+    "test",
+    "create",
+    "init",
+    "update",
+    "upgrade",
+    "pm",
+    "link",
+    "unlink",
+    "outdated",
+    "why",
+    "exec",
+    "repl",
+    "build",
+  ]);
+  const positional: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === "--") {
+      const next = args[i + 1];
+      if (next) positional.push(next);
+      break;
+    }
+    if (arg.startsWith("-")) {
+      if (valueFlags.has(arg)) {
+        const next = args[i + 1];
+        if (next && !next.startsWith("-")) i += 1;
+      }
+      continue;
+    }
+    positional.push(arg);
+  }
+  const first = positional[0];
+  if (!first) return undefined;
+  if (notAFile.has(first)) return undefined;
+  if (first === "run") {
+    const script = positional[1];
+    if (!script || !looksLikeScriptPath(script)) return undefined;
+    return script;
+  }
+  return looksLikeScriptPath(first) ? first : undefined;
+}
+
+/**
+ * Script path a stdio interpreter will open, when that argument is a file.
+ * `node -e`, `node --version`, `python -m`, and package-runner args return
+ * undefined. `.exe` and `.cmd` names use the same interpreter.
+ */
+export function interpreterScriptArg(
+  command: string,
+  args: string[],
+): string | undefined {
+  const base = commandBasename(command).toLowerCase();
+  if (!INTERPRETERS.has(base)) return undefined;
+  if (base === "python" || base === "python3") {
+    if (pythonHasNoScript(args)) return undefined;
+    return firstPositional(args, PYTHON_VALUE_FLAGS, PYTHON_NO_SCRIPT);
+  }
+  if (base === "deno") return denoScriptArg(args);
+  if (base === "bun") return bunScriptArg(args);
+  const rest = base === "tsx" && args[0] === "watch" ? args.slice(1) : args;
+  return firstPositional(rest, NODE_VALUE_FLAGS, NODE_NO_SCRIPT);
+}
+
+/**
+ * VS Code, Copilot's user file, Gemini CLI, and Codex start stdio in `cwd`.
+ * Copilot's project file and every other client do not.
+ */
+function honorsConfiguredCwd(
+  file: Pick<ConfigFile, "path" | "format">,
+  options: LocateOptions = {},
+): boolean {
+  if (file.format === "codex") return true;
+  if (isVsCodeConfigFile(file.path, options)) return true;
+  if (isGeminiSettings(file.path)) return true;
+  if (isCopilotUserConfigFile(file.path, options)) return true;
+  return false;
+}
+
+/**
+ * Directory for relative command lookup and for the `--probe` spawn.
+ * An omitted `cwd`, or one that still contains `${…}`, stays the scan root.
+ * A relative `cwd` is resolved from that root. The config file is not rewritten.
+ */
+export function stdioWorkingDirectory(
+  server: ParsedServer,
+  file: Pick<ConfigFile, "path" | "format">,
+  options: {
+    cwd?: string;
+    platform?: NodeJS.Platform;
+    home?: string;
+    env?: NodeJS.ProcessEnv;
+  } = {},
+): string {
+  const base = options.cwd && options.cwd.trim() ? resolve(options.cwd) : process.cwd();
+  if (server.transport.kind !== "stdio") return base;
+  if (!honorsConfiguredCwd(file, options)) return base;
+  const configured = server.raw.cwd;
+  if (typeof configured !== "string") return base;
+  const value = configured.trim();
+  if (!value || unresolvedTokens(value).length > 0) return base;
+  return isAbsolute(value) ? resolve(value) : resolve(base, value);
+}
+
+/**
+ * A relative interpreter script that is not a file in the working directory.
+ * Absolute paths are checked too. The file is not read.
+ */
+function missingScriptFinding(
+  command: string,
+  args: string[],
+  workDir: string,
+  server: string,
+  file: string,
+): Finding | undefined {
+  if (unresolvedTokens(command).length > 0) return undefined;
+  const script = interpreterScriptArg(command, args);
+  if (!script || unresolvedTokens(script).length > 0) return undefined;
+  const candidate = isAbsolute(script) ? script : resolve(workDir, script);
+  if (isExistingFile(candidate)) return undefined;
+  return {
+    severity: "fail",
+    code: "SCRIPT_NOT_FOUND",
+    message: `Script not found: ${script}`,
+    server,
+    file,
+  };
 }
 
 function worst(a: Severity, b: Severity): Severity {
@@ -541,10 +869,13 @@ export function checkConfig(
       });
     }
 
+    const useCwd =
+      server.transport.kind === "stdio" && honorsConfiguredCwd(file, options);
     const unresolved = unresolvedVariableFinding(
       server,
       file.path,
       Boolean(options.strictVariables),
+      useCwd,
     );
     if (unresolved) local.push(unresolved);
 
@@ -591,12 +922,13 @@ export function checkConfig(
     if (server.transport.kind === "stdio") {
       const { command, args } = server.transport;
       const commandUnresolved = unresolvedTokens(command).length > 0;
+      const workDir = stdioWorkingDirectory(server, file, options);
 
       if (
         !commandUnresolved &&
         !commandOnPath(
           command,
-          options.cwd,
+          workDir,
           commandLookupEnv(server.raw.env, process.env, process.platform, {
             file: file.path,
             platform: options.platform,
@@ -613,6 +945,15 @@ export function checkConfig(
           file: file.path,
         });
       }
+
+      const missingScript = missingScriptFinding(
+        command,
+        args,
+        workDir,
+        server.name,
+        file.path,
+      );
+      if (missingScript) local.push(missingScript);
 
       const base = commandBasename(command);
       if (!commandUnresolved && PACKAGE_RUNNERS.has(base)) {

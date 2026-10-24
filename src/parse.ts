@@ -29,6 +29,12 @@ const ServerEntrySchema = z
     settings: z.unknown().optional(),
     bearerTokenEnvVar: z.string().optional(),
     envHttpHeaders: z.record(z.string(), z.string()).optional(),
+    /**
+     * Stdio working directory for the clients that read it (VS Code,
+     * Copilot user config, Gemini CLI, Codex). Other clients may still
+     * carry the field; the checker decides whether to use it.
+     */
+    cwd: z.string().optional(),
   })
   .passthrough();
 
@@ -254,6 +260,14 @@ function parseCodexToml(path: string, text: string): ConfigFile {
         error: `mcp_servers.${name}.env_http_headers values must be strings`,
       };
     }
+    if (entry.cwd !== undefined && typeof entry.cwd !== "string") {
+      return {
+        path,
+        format: "invalid",
+        servers: [],
+        error: `mcp_servers.${name}.cwd must be a string`,
+      };
+    }
     record[name] = {
       command: typeof entry.command === "string" ? entry.command : undefined,
       args,
@@ -266,6 +280,7 @@ function parseCodexToml(path: string, text: string): ConfigFile {
           ? entry.bearer_token_env_var
           : undefined,
       envHttpHeaders: envHeaders,
+      cwd: typeof entry.cwd === "string" ? entry.cwd : undefined,
     };
   }
 

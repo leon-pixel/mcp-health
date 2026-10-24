@@ -78,7 +78,6 @@ jobs:
       - uses: leon-pixel/mcp-health@v1
         with:
           path: .
-          args: --no-user
 ```
 
 `v1` is a moving tag. The [release workflow](.github/workflows/release.yml) points it at the latest stable `v1.x.y` release. It currently tracks the published 1.5.0 release and moves again when a newer stable tag is pushed.
@@ -91,8 +90,21 @@ The action is listed on the Marketplace as [mcp-health-doctor](https://github.co
 - uses: leon-pixel/mcp-health@v1
   with:
     path: services/api
-    args: --no-user
+    args: --probe
 ```
+
+The action always passes `--no-user`, so the job does not read the runner's user-level configs. `args` are additional flags. Setting `args` does not remove `--no-user`. The example above runs `check --no-user --probe`, plus the annotation, allow-missing, and SARIF flags the action adds itself.
+
+`include-user: true` drops that `--no-user` and scans the runner's Cursor, Claude, VS Code, Codex, and other user configs. A GitHub-hosted runner usually has an empty home directory. A self-hosted runner reads that machine's user. An explicit `--no-user` inside `args` still skips user configs.
+
+```yaml
+- uses: leon-pixel/mcp-health@v1
+  with:
+    include-user: true
+    args: --online
+```
+
+Before this fix, `args` defaulted to `--no-user` and GitHub replaced that default when the workflow set the input. `args: --probe` ran without `--no-user`. A workflow that set `args` in order to read the runner's user configs should set `include-user: true` instead. A workflow that already passed `args: --no-user` (or `args: --no-user --probe`) still skips user configs. Repeating `--no-user` is safe.
 
 A repository with no MCP config is `NO_CONFIG`. That warning does not fail the job unless `fail-on-missing` is `true`. Leave the default (`false`) for a repo that may have no MCP config. Set it when that directory is supposed to contain one:
 
@@ -100,7 +112,6 @@ A repository with no MCP config is `NO_CONFIG`. That warning does not fail the j
 - uses: leon-pixel/mcp-health@v1
   with:
     path: services/api
-    args: --no-user
     fail-on-missing: true
 ```
 
@@ -119,7 +130,6 @@ jobs:
       - uses: actions/checkout@v5
       - uses: leon-pixel/mcp-health@v1
         with:
-          args: --no-user
           annotations: true
           sarif-file: mcp-health.sarif
           upload-sarif: true
@@ -127,7 +137,7 @@ jobs:
 
 The check step itself exits 0 so the upload can still run after findings. A following step exits with the real mcp-health code, so the job still fails on warnings and failures. The `exit-code` output is that code (`0`, `1`, or `2`).
 
-Optional `args`: `--online`, `--probe`, `--no-tools`, `--strict-variables`, `--probe-timeout 8000`, `--json`.
+Optional `args`: `--online`, `--probe`, `--no-tools`, `--strict-variables`, `--probe-timeout 8000`, `--json`. These are added after `--no-user`.
 
 ## Gate a commit
 
@@ -170,15 +180,15 @@ repos:
 | Client | Path | Shape |
 |--------|------|--------|
 | Cursor | `.cursor/mcp.json`, `mcp.json`, `.mcp.json` | `mcpServers` |
-| VS Code | `.vscode/mcp.json` | `servers`. An `env` value may be a string, a number, or null. `unix:` and `pipe:` URLs are socket transports, including a fragment subpath |
+| VS Code | `.vscode/mcp.json` | `servers`. An `env` value may be a string, a number, or null. `unix:` and `pipe:` URLs are socket transports, including a fragment subpath. `cwd` is the stdio working directory and defaults to the workspace folder |
 | Copilot | `.github/mcp.json` | `mcpServers`, or a bare object whose keys are server names. `command` and `args` are stdio. `url` is HTTP. `type: "local"` still uses `command` and `args`. `tools` is an allowlist |
 | Claude Code | `.claude/settings.json`, `.claude/settings.local.json` | Permissions and hooks, not servers. An `mcpServers` key is a failure, `MCP_SERVERS_IGNORED`. Project servers belong in `.mcp.json`. A settings file with no `mcpServers` key is skipped |
-| Gemini CLI | `.gemini/settings.json` | `mcpServers`. `httpUrl` is streamable HTTP and wins over `url` and `command`. `$NAME` in an env value is an environment reference. A file with no `mcpServers` key is skipped |
+| Gemini CLI | `.gemini/settings.json` | `mcpServers`. `httpUrl` is streamable HTTP and wins over `url` and `command`. `$NAME` in an env value is an environment reference. `cwd` is the stdio working directory, relative to the project. A file with no `mcpServers` key is skipped |
 | Continue | `.continue/config.yaml`, `.continue/mcpServers/*.{yaml,yml,json}` | `mcpServers` list of `{ name, command, args, env, url }`. A JSON file in that directory may instead be a `mcpServers` object. A file with no `mcpServers` list is skipped |
 | Junie | `.junie/mcp/mcp.json` | `mcpServers` |
 | Windsurf | `.windsurf/mcp_config.json` | `mcpServers`. Remote URLs may be `serverUrl` or `url` |
 | Zed | `.zed/settings.json` | `context_servers`. `command` may be a string or `{ "path", "args", "env" }`. `"source": "extension"` is an extension server. Comments and trailing commas are allowed |
-| Codex | `.codex/config.toml` | `[mcp_servers.<name>]` with `command`, `args`, `url`, `env`, `http_headers`, `bearer_token_env_var`, `env_http_headers`, `enabled` |
+| Codex | `.codex/config.toml` | `[mcp_servers.<name>]` with `command`, `args`, `cwd`, `url`, `env`, `http_headers`, `bearer_token_env_var`, `env_http_headers`, `enabled` |
 
 A Codex `config.toml`, a `~/.claude.json` with no servers for this scan root, a Continue file with no `mcpServers` list, a Gemini CLI `settings.json` with no `mcpServers` key, or another settings file with no MCP section is skipped. It is not a failed scan. A Claude Code settings file that does contain `mcpServers` is `MCP_SERVERS_IGNORED`, because Claude Code does not load servers from that file.
 
@@ -186,9 +196,9 @@ A Codex `config.toml`, a `~/.claude.json` with no servers for this scan root, a 
 
 - Cursor `~/.cursor/mcp.json`
 - VS Code user `mcp.json` (`servers`): `~/Library/Application Support/Code/User/mcp.json` on macOS, `$XDG_CONFIG_HOME/Code/User/mcp.json` (default `~/.config/Code/User/mcp.json`) on Linux, or `%APPDATA%/Code/User/mcp.json` on Windows. Insiders and VSCodium are not scanned
-- Copilot `mcp-config.json` (`mcpServers`): `$COPILOT_HOME/mcp-config.json`, or `~/.copilot/mcp-config.json` when `COPILOT_HOME` is unset
+- Copilot `mcp-config.json` (`mcpServers`): `$COPILOT_HOME/mcp-config.json`, or `~/.copilot/mcp-config.json` when `COPILOT_HOME` is unset. `cwd` is the stdio working directory. Project `.github/mcp.json` does not use `cwd`
 - Claude Code `~/.claude/settings.json` is permissions and hooks, not a server list. An `mcpServers` key is `MCP_SERVERS_IGNORED`. User and per-project servers are in `~/.claude.json`
-- Gemini CLI `~/.gemini/settings.json`. When `GEMINI_CLI_HOME` is set, the file is `$GEMINI_CLI_HOME/.gemini/settings.json`. Shape `mcpServers`, including `httpUrl`. A file with no `mcpServers` key is skipped. System settings are not scanned
+- Gemini CLI `~/.gemini/settings.json`. When `GEMINI_CLI_HOME` is set, the file is `$GEMINI_CLI_HOME/.gemini/settings.json`. Shape `mcpServers`, including `httpUrl` and `cwd` (relative to the project). A file with no `mcpServers` key is skipped. System settings are not scanned
 - Claude Code `~/.claude.json`: top-level `mcpServers`, and `projects[<absolute path>].mcpServers` for this scan root only. A key matches when it is the same directory as the scan root, including a symlink and macOS `/tmp` versus `/private/tmp`. Other projects in the file are ignored. `CLAUDE_CONFIG_DIR` is the directory that holds `.claude.json` instead of the home directory. On Windows the file is `%USERPROFILE%\.claude.json`
 - Continue `~/.continue/config.yaml` (`mcpServers` list)
 - Junie `~/.junie/mcp/mcp.json`
@@ -197,11 +207,13 @@ A Codex `config.toml`, a `~/.claude.json` with no servers for this scan root, a 
 - Windsurf `~/.codeium/windsurf/mcp_config.json`
 - Devin Desktop `mcp_config.json` under `$XDG_CONFIG_HOME/devin/` (default `~/.config/devin/`), or `%APPDATA%/devin/` on Windows
 - Zed `settings.json` under `$XDG_CONFIG_HOME/zed/` on Linux, plus `~/Library/Application Support/Zed/settings.json` and `~/.config/zed/settings.json` on macOS, or `%APPDATA%/Zed/settings.json` on Windows
-- Codex `~/.codex/config.toml`
+- Codex `$CODEX_HOME/config.toml` when `CODEX_HOME` is a non-empty path, otherwise `~/.codex/config.toml`. A missing file is skipped. Project `.codex/config.toml` is a different file
 
 ## Checks
 
-- Offline: JSON, YAML, and TOML shape, PATH (including Windows `PATHEXT`), URLs, pins, placeholders. `npx`, `npm exec`, `uvx`, `bunx`, `pnpm dlx`, `pnpm exec`, and `yarn dlx` warn `UNPINNED_PACKAGE` unless the package is `name@version` (`uvx --from name@version` counts as pinned). `name@latest`, `name@next`, and `name@*` are not pins. `-y`, `--yes`, `--quiet`, `dlx`, and `exec` are not the package name. A stdio command is resolved from the scan root. When the server sets `env.PATH` and that value has no `${…}` left, VS Code appends it to the process PATH (`.vscode/mcp.json` and the VS Code user `mcp.json`), and `--probe` spawns with that appended PATH. Other clients replace the process PATH. On Windows, `Path` is the same variable. A value that still contains `${…}` stays on the process PATH
+- Offline: JSON, YAML, and TOML shape, PATH (including Windows `PATHEXT`), URLs, pins, placeholders. `npx`, `npm exec`, `uvx`, `bunx`, `pnpm dlx`, `pnpm exec`, and `yarn dlx` warn `UNPINNED_PACKAGE` unless the package is `name@version` (`uvx --from name@version` counts as pinned). `name@latest`, `name@next`, and `name@*` are not pins. `-y`, `--yes`, `--quiet`, `dlx`, and `exec` are not the package name. A stdio command is resolved from the scan root, or from `cwd` when that client uses it. When the server sets `env.PATH` and that value has no `${…}` left, VS Code appends it to the process PATH (`.vscode/mcp.json` and the VS Code user `mcp.json`), and `--probe` spawns with that appended PATH. Other clients replace the process PATH. On Windows, `Path` is the same variable. A value that still contains `${…}` stays on the process PATH
+- Stdio `cwd` is used for VS Code (`.vscode/mcp.json` and the user `mcp.json`), Copilot user `mcp-config.json`, Gemini CLI, and Codex. A relative `cwd` is resolved from the scan root. `${workspaceFolder}` and the other config variables are expanded first. An omitted `cwd` stays the scan root. A value that still contains `${…}` does not change the directory and warns `UNRESOLVED_VARIABLE`. Other clients ignore `cwd`. The config file is not rewritten
+- A script argument for `node`, `python`, `python3`, `bun`, `deno`, or `tsx` (including the `.exe` and `.cmd` names) that is not a file in that directory is `SCRIPT_NOT_FOUND`. The file is not read. `node -e`, `node --version`, `python -m`, and `npx` / `uvx` / `bunx` / `pnpm` / `yarn` package arguments are not script paths. `bun run dev` is a package script. `bun run src/index.ts` is a file
 - URL protocols: `http:` and `https:` are remote URLs. Claude Code WebSocket (`type: "ws"`) may use `ws:` or `wss:`. VS Code may use a Unix socket (`unix:///tmp/server.sock`) or a Windows named pipe (`pipe:///pipe/named-pipe`), including a fragment subpath such as `unix:///tmp/server.sock#/mcp/subpath`. Any other protocol (`ftp:`, `file:`) is `BAD_URL_PROTOCOL`. A URL that still contains `${…}` is not also `BAD_URL` or `BAD_URL_PROTOCOL`
 - In a VS Code `servers` config, an `env` value may be a string, a number, or null. A number is checked as its decimal string. Null omits the variable and is not `PLACEHOLDER_ENV`. A boolean or object is still `SCHEMA_ERROR`. Other clients still require string env values
 - Cursor stdio (`.cursor/mcp.json` and project `mcp.json`) and VS Code stdio `envFile` warn `ENV_FILE_MISSING` when the expanded path is not a file. The finding is a warning. The file is not read. A value that still contains `${…}` is not also `ENV_FILE_MISSING`. HTTP servers, `.mcp.json`, and `.github/mcp.json` do not use `envFile`
@@ -209,7 +221,7 @@ A Codex `config.toml`, a `~/.claude.json` with no servers for this scan root, a 
 - `disabled: true` (Cursor) and `enabled: false` (Codex, Zed) are reported as disabled and are not checked
 - Zed `"source": "extension"` is an extension-provided server. It is not a missing command
 - `--online`: npm latest vs the pinned version or semver range (`NPM_DRIFT` only when latest is outside the pin). The lookup uses the same package those launchers run. A registry miss is `NPM_LOOKUP_FAILED`
-- `--probe`: MCP handshake from the project root (stdio spawn, or HTTP POST). Stdio matches the JSON-RPC id and skips logs and notifications. HTTP sends the config headers, plus Codex `bearer_token_env_var` and `env_http_headers` when those variables are set. The HTTP probe speaks `http:` and `https:` only. `ws:`, `wss:`, `unix:`, and `pipe:` are `PROBE_SKIPPED`. A 401 with an OAuth `WWW-Authenticate` challenge is a warning (`PROBE_OAUTH`); the editor signs in and this probe does not. Env values are never printed
+- `--probe`: MCP handshake (stdio spawn, or HTTP POST). Stdio is spawned in the scan root, or in `cwd` when that client uses it. Stdio matches the JSON-RPC id and skips logs and notifications. HTTP sends the config headers, plus Codex `bearer_token_env_var` and `env_http_headers` when those variables are set. The HTTP probe speaks `http:` and `https:` only. `ws:`, `wss:`, `unix:`, and `pipe:` are `PROBE_SKIPPED`. A 401 with an OAuth `WWW-Authenticate` challenge is a warning (`PROBE_OAUTH`); the editor signs in and this probe does not. Env values are never printed
 - After a successful handshake, `--probe` also calls `tools/list`. One or more tools is `TOOLS_OK`. An empty list is a warning, `EMPTY_TOOLS`, not a failure and not `HEALTHY`. A tools/list error or timeout is a warning, `TOOLS_LIST_FAILED`. `--no-tools` skips that call
 - Doc placeholders warn in env (`PLACEHOLDER_ENV`), headers, and Cursor `auth` (`PLACEHOLDER_HEADER`): `your-key-here`, `your-token-here`, `your-api-token`, `your-oauth-client-id`, `your-client-secret`, `<token>`, `YOUR_`, `REPLACE_`, empty, and `changeme`. A real token is not a placeholder and is not printed
 - Gemini CLI `$NAME` in an env value is `UNRESOLVED_VARIABLE` when that variable is unset, because the CLI substitutes an empty string. `%NAME%` is the same check on Windows. Other clients do not expand `$NAME`

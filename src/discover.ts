@@ -139,6 +139,17 @@ function copilotUserPath(options: LocateOptions = {}): string {
   return join(home, ".copilot", "mcp-config.json");
 }
 
+/**
+ * Codex user config. `CODEX_HOME` replaces `~/.codex` when it is non-empty.
+ * A blank value keeps the default. Project `.codex/config.toml` is separate.
+ */
+function codexUserPath(options: LocateOptions = {}): string {
+  const { home, env } = locate(options);
+  const codexHome = env.CODEX_HOME?.trim();
+  if (codexHome) return join(codexHome, "config.toml");
+  return join(home, ".codex", "config.toml");
+}
+
 /** `~/.claude.json`, or `$CLAUDE_CONFIG_DIR/.claude.json` when that variable is set. */
 function claudeCodeUserPath(options: LocateOptions = {}): string {
   const { platform: p, home, env } = locate(options);
@@ -223,6 +234,14 @@ export function isVsCodeConfigFile(
   return configPathIdentity(file) === configPathIdentity(vscodeUserMcpPath(options));
 }
 
+/** Copilot user `mcp-config.json`, not the project `.github/mcp.json`. */
+export function isCopilotUserConfigFile(
+  file: string,
+  options: LocateOptions = {},
+): boolean {
+  return configPathIdentity(file) === configPathIdentity(copilotUserPath(options));
+}
+
 /** Stable identity for labeling a config file as project or user. */
 function configPathIdentity(input: string): string {
   let normalized = resolve(input);
@@ -265,7 +284,7 @@ function userLevelPaths(options: LocateOptions = {}): string[] {
     geminiUserPath(options),
     ...windsurfUserPaths(options),
     ...zedUserPaths(options),
-    join(home, ".codex", "config.toml"),
+    codexUserPath(options),
     join(home, ".continue", "config.yaml"),
     join(home, ".junie", "mcp", "mcp.json"),
     clineUserPath(options),
@@ -303,6 +322,7 @@ export const __testing = {
   geminiUserPath,
   vscodeUserMcpPath,
   copilotUserPath,
+  codexUserPath,
   userLevelPaths,
   PROJECT_CANDIDATES,
 };

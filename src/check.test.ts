@@ -1532,13 +1532,13 @@ describe("VS Code env values", () => {
             numeric: {
               type: "stdio",
               command: "node",
-              args: ["server.js"],
+              args: ["--version"],
               env: { PORT: 3000, OPTIONAL: null },
             },
             plain: {
               type: "stdio",
               command: "node",
-              args: ["server.js"],
+              args: ["--version"],
             },
           },
         }),
@@ -1549,7 +1549,7 @@ describe("VS Code env values", () => {
           mcpServers: {
             api: {
               command: "node",
-              args: ["server.js"],
+              args: ["--version"],
               env: { PORT: 3000 },
             },
           },
@@ -1594,7 +1594,7 @@ describe("VS Code env values", () => {
             numeric: {
               type: "stdio",
               command: "node",
-              args: ["server.js"],
+              args: ["--version"],
               env: { ENABLED: true },
             },
           },
@@ -1640,7 +1640,7 @@ describe("envFile", () => {
           mcpServers: {
             local: {
               command: "node",
-              args: ["server.js"],
+              args: ["--version"],
               envFile: "${workspaceFolder}/.env",
             },
             remote: {
@@ -1649,7 +1649,7 @@ describe("envFile", () => {
             },
             deferred: {
               command: "node",
-              args: ["server.js"],
+              args: ["--version"],
               envFile: "${input:env-file}",
             },
           },
@@ -1661,7 +1661,7 @@ describe("envFile", () => {
           mcpServers: {
             root: {
               command: "node",
-              args: ["server.js"],
+              args: ["--version"],
               envFile: ".env",
             },
           },
@@ -1674,7 +1674,7 @@ describe("envFile", () => {
             editor: {
               type: "stdio",
               command: "node",
-              args: ["server.js"],
+              args: ["--version"],
               envFile: "${workspaceFolder}/missing.env",
             },
           },
@@ -1686,7 +1686,7 @@ describe("envFile", () => {
           mcpServers: {
             claude: {
               command: "node",
-              args: ["server.js"],
+              args: ["--version"],
               envFile: "${workspaceFolder}/.env",
             },
           },
@@ -1698,7 +1698,7 @@ describe("envFile", () => {
           mcpServers: {
             copilot: {
               command: "node",
-              args: ["server.js"],
+              args: ["--version"],
               envFile: "${workspaceFolder}/.env",
             },
           },

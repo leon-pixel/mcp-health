@@ -12,9 +12,13 @@ inputs:
     required: false
     default: "."
   args:
-    description: Extra CLI args (e.g. --no-user --online --probe)
+    description: Additional CLI flags, appended after --no-user. For example --online or --probe. Setting this does not replace --no-user. Set include-user to true to scan user-level configs.
     required: false
-    default: "--no-user"
+    default: ""
+  include-user:
+    description: Scan the runner's user-level MCP configs (Cursor, Claude, VS Code, Codex, and the rest). Default false passes --no-user. An explicit --no-user in args still skips those configs.
+    required: false
+    default: "false"
   node-version:
     description: Node.js version
     required: false
@@ -70,6 +74,12 @@ runs:
         fi
         if [ "${{ inputs.fail-on-missing }}" != "true" ]; then
           flags+=(--allow-missing)
+        fi
+        # args are additional flags. GitHub replaces an input default when
+        # the workflow sets it, so --no-user cannot live only as the args default.
+        # include-user: true is the opt-in that reads the runner's user configs.
+        if [ "${{ inputs.include-user }}" != "true" ]; then
+          flags+=(--no-user)
         fi
         sarif="${{ inputs.sarif-file }}"
         if [ -n "$sarif" ] && [ "$sarif" != "false" ]; then

@@ -12,6 +12,7 @@ import {
   isExtensionProvided,
   isServerDisabled,
   serverHasUnresolved,
+  stdioWorkingDirectory,
 } from "./check.js";
 import {
   fetchNpmLatest,
@@ -311,7 +312,16 @@ export async function runCheck(options: RunOptions): Promise<HealthReport> {
           const probed = await probeServer(server, {
             timeoutMs: probeTimeoutMs,
             file: path,
-            cwd: root,
+            cwd: stdioWorkingDirectory(
+              server,
+              { path, format: parsed.format },
+              {
+                cwd: root,
+                platform: options.platform,
+                home: options.home,
+                env: options.env,
+              },
+            ),
             listTools: options.probeListTools !== false,
             platform: options.platform,
             home: options.home,

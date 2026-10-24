@@ -8,6 +8,8 @@ export {
   resolveCommandOnPath,
   commandLookupEnv,
   commandNeedsShell,
+  stdioWorkingDirectory,
+  interpreterScriptArg,
 } from "./check.js";
 export { expandServerVariables, expandString } from "./vars.js";
 export { runCheck } from "./run.js";

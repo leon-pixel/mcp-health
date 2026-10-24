@@ -1035,6 +1035,137 @@ describe("Gemini CLI settings.json", () => {
   });
 });
 
+describe("Codex CODEX_HOME", () => {
+  const secret = "codex-home-secret-do-not-print";
+
+  function writeToml(file: string, body: string) {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, body);
+  }
+
+  it("reads $CODEX_HOME/config.toml, keeps the default and the project file, and skips both with --no-user", async () => {
+    const root = mkdtempSync(join(tmpdir(), "mcp-health-codex-home-"));
+    const home = mkdtempSync(join(tmpdir(), "mcp-health-codex-user-"));
+    const override = join(home, "codex-home");
+    const userFile = join(home, ".codex", "config.toml");
+    const overrideFile = join(override, "config.toml");
+    const projectFile = join(root, ".codex", "config.toml");
+    try {
+      expect(__testing.codexUserPath({ home, env: {} })).toBe(userFile);
+      expect(__testing.codexUserPath({ home, env: { CODEX_HOME: "" } })).toBe(userFile);
+      expect(__testing.codexUserPath({ home, env: { CODEX_HOME: "  " } })).toBe(
+        userFile,
+      );
+      expect(__testing.codexUserPath({ home, env: { CODEX_HOME: override } })).toBe(
+        overrideFile,
+      );
+
+      writeToml(
+        userFile,
+        [
+          "[mcp_servers.fromHome]",
+          'command = "node"',
+          'args = ["--version"]',
+          "",
+          "[mcp_servers.fromHome.env]",
+          `TOKEN = "${secret}"`,
+          "",
+        ].join("\n"),
+      );
+      writeToml(
+        projectFile,
+        ['[mcp_servers.fromProject]', 'command = "node"', 'args = ["--version"]', ""].join(
+          "\n",
+        ),
+      );
+
+      const included = await runCheck({
+        root,
+        includeUserConfig: true,
+        home,
+        env: {},
+      });
+      expect(names(included).sort()).toEqual(["fromHome", "fromProject"]);
+      expect(included.files).toContain(userFile);
+      expect(included.files).toContain(projectFile);
+      expect(included.servers.find((server) => server.name === "fromHome")?.scope).toBe(
+        "user",
+      );
+      expect(
+        included.servers.find((server) => server.name === "fromProject")?.scope,
+      ).toBe("project");
+      expectSecretsHidden(included, [secret]);
+
+      const blank = await runCheck({
+        root,
+        includeUserConfig: true,
+        home,
+        env: { CODEX_HOME: "   " },
+      });
+      expect(names(blank).sort()).toEqual(["fromHome", "fromProject"]);
+      expect(blank.files).toContain(userFile);
+      expect(blank.files).not.toContain(overrideFile);
+
+      const skipped = await runCheck({
+        root,
+        includeUserConfig: false,
+        home,
+        env: {},
+      });
+      expect(names(skipped)).toEqual(["fromProject"]);
+      expect(skipped.files).toEqual([projectFile]);
+      expect(skipped.files).not.toContain(userFile);
+      expect(codes(skipped)).not.toContain("FILE_NOT_FOUND");
+
+      const missingOverride = await runCheck({
+        root,
+        includeUserConfig: true,
+        home,
+        env: { CODEX_HOME: override },
+      });
+      expect(names(missingOverride)).toEqual(["fromProject"]);
+      expect(missingOverride.files).not.toContain(userFile);
+      expect(missingOverride.files).not.toContain(overrideFile);
+      expect(codes(missingOverride)).not.toContain("FILE_NOT_FOUND");
+
+      const skippedOverride = await runCheck({
+        root,
+        includeUserConfig: false,
+        home,
+        env: { CODEX_HOME: override },
+      });
+      expect(names(skippedOverride)).toEqual(["fromProject"]);
+      expect(codes(skippedOverride)).not.toContain("FILE_NOT_FOUND");
+
+      writeToml(
+        overrideFile,
+        ['[mcp_servers.fromOverride]', 'command = "node"', 'args = ["--version"]', ""].join(
+          "\n",
+        ),
+      );
+      const relocated = await runCheck({
+        root,
+        includeUserConfig: true,
+        home,
+        env: { CODEX_HOME: override },
+      });
+      expect(names(relocated).sort()).toEqual(["fromOverride", "fromProject"]);
+      expect(relocated.files).toContain(overrideFile);
+      expect(relocated.files).toContain(projectFile);
+      expect(relocated.files).not.toContain(userFile);
+      expect(
+        relocated.servers.find((server) => server.name === "fromOverride")?.scope,
+      ).toBe("user");
+      expect(
+        relocated.servers.find((server) => server.name === "fromProject")?.scope,
+      ).toBe("project");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("Copilot project .github/mcp.json", () => {
   function writeJson(file: string, body: unknown) {
     mkdirSync(dirname(file), { recursive: true });

@@ -111,6 +111,9 @@ export function expandServerVariables(
   if (typeof raw.envFile === "string") {
     raw.envFile = expandString(raw.envFile, ctx);
   }
+  if (typeof raw.cwd === "string") {
+    raw.cwd = expandString(raw.cwd, ctx);
+  }
 
   if (server.transport.kind === "stdio") {
     return {
