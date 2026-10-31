@@ -17,6 +17,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- The README demo is current `mcp-health check --no-user` output again (#100). `docs/demo.gif` shows `fixtures/issues` (exit 2) and `fixtures/healthy` (exit 0), including hint lines and `project` scope labels. `docs/demo.cast` is an asciinema cast of those two commands and is linked next to the GIF. Checkout paths are shown as the fixture directory. There are no home-directory paths or secret values. After `npm run build`, `python3 scripts/render-demo-gif.py` rebuilds the GIF and `python3 scripts/record-demo-cast.py` records the cast. Neither command uses the network.
 - A scan whose only finding is `NO_CONFIG` still exits 1, and the summary line says `exit 1 because of a config-level warning (NO_CONFIG)` (#103). `--allow-missing` still exits 0, and that summary does not claim exit 1. Server counts stay 0. `warn` and `configWarnings` stay 0. The finding still names `.cursor/mcp.json`, `.vscode/mcp.json`, and `--allow-missing`, and it points at `mcp-health init`. JSON still includes the finding. No config file is rewritten.
 
 ### Fixed

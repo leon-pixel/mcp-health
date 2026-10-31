@@ -6,9 +6,11 @@ Catch rotten MCP configs before agents fail on them.
 
 ## Demo
 
-Real `mcp-health check --no-user` output. The first run is `fixtures/issues` (exit 2). The second is `fixtures/healthy` (exit 0). The checkout path is shown as the fixture directory. After `npm run build`, regenerate it with `python3 scripts/render-demo-gif.py` (needs Pillow and a monospace font).
+Real `mcp-health check --no-user` output. The first run is `fixtures/issues` (exit 2). The second is `fixtures/healthy` (exit 0). The checkout path is shown as the fixture directory. Hint lines and `project` scope labels are part of that output. After `npm run build`, regenerate the GIF with `python3 scripts/render-demo-gif.py` (needs Pillow and a monospace font). Record the cast with `python3 scripts/record-demo-cast.py`. Neither command uses the network. Play the cast locally with `asciinema play docs/demo.cast`.
 
 ![mcp-health check on fixtures/issues, then fixtures/healthy](docs/demo.gif)
+
+[asciinema cast of the same two commands](docs/demo.cast)
 
 ## Install
 
