@@ -183,7 +183,7 @@ function inheritedPath(
  * PATH used to resolve a stdio command and to spawn `--probe`.
  * Other clients replace the process PATH with the server's `env.PATH`.
  * VS Code appends it: `extHostMcpNode` uses `existing + delimiter + value`
- * for `.vscode/mcp.json` and the VS Code user `mcp.json`.
+ * for `.vscode/mcp.json` and the stable, Insiders, and VSCodium user `mcp.json`.
  * A value that still contains `${…}` is not a directory list, so lookup
  * keeps the process PATH. On Windows, `Path` is the same variable.
  */
@@ -1162,6 +1162,7 @@ function readsEnvFile(file: string, format: ConfigFile["format"]): boolean {
     ".codex",
     ".claude",
     ".cline",
+    ".roo",
   ]);
   return !normalized.split("/").some((part) => ignored.has(part));
 }

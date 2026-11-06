@@ -381,7 +381,7 @@ export async function runCheck(options: RunOptions): Promise<HealthReport> {
           severity,
           code: "NO_CONFIG",
           message:
-            "No MCP config files found (Cursor, VS Code, Claude, Continue, Junie, Cline, Gemini CLI, Antigravity, Kiro, OpenCode, Amazon Q, Amp, Goose, Copilot, Windsurf, Zed, or Codex project or user paths). Add a project file such as .cursor/mcp.json or .vscode/mcp.json, run mcp-health init to print a starter config, or pass --allow-missing to exit 0 when this repository is supposed to have no MCP config.",
+            "No MCP config files found (Cursor, VS Code, Claude, Continue, Junie, Cline, Roo Code, Gemini CLI, Antigravity, Kiro, OpenCode, Amazon Q, Amp, Goose, Copilot, Windsurf, Zed, or Codex project or user paths). Add a project file such as .cursor/mcp.json or .vscode/mcp.json, run mcp-health init to print a starter config, or pass --allow-missing to exit 0 when this repository is supposed to have no MCP config.",
           file: root,
         },
       ],

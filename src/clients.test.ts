@@ -1375,6 +1375,42 @@ describe("VS Code user mcp.json and Copilot mcp-config.json", () => {
       expect(__testing.vscodeUserMcpPath(winDefault)).toBe(
         join(home, "AppData", "Roaming", "Code", "User", "mcp.json"),
       );
+      expect(
+        __testing.vscodeUserMcpPath({
+          platform: "win32",
+          home,
+          env: { APPDATA: "  " },
+        }),
+      ).toBe(join(home, "AppData", "Roaming", "Code", "User", "mcp.json"));
+      expect(
+        __testing.vscodeUserMcpPaths({
+          platform: "linux",
+          home,
+          env: { XDG_CONFIG_HOME: "relative/xdg" },
+        }),
+      ).toEqual([
+        join(home, ".config", "Code", "User", "mcp.json"),
+        join(home, ".config", "Code - Insiders", "User", "mcp.json"),
+        join(home, ".config", "VSCodium", "User", "mcp.json"),
+      ]);
+      expect(__testing.vscodeUserMcpPaths(linuxXdg)).toEqual([
+        join(xdg, "Code", "User", "mcp.json"),
+        join(xdg, "Code - Insiders", "User", "mcp.json"),
+        join(xdg, "VSCodium", "User", "mcp.json"),
+      ]);
+      const relativeXdg = __testing.userLevelPaths({
+        platform: "linux",
+        home,
+        env: { XDG_CONFIG_HOME: "relative/xdg" },
+      });
+      expect(relativeXdg.some((entry) => entry.includes("relative/xdg"))).toBe(false);
+      expect(relativeXdg).toEqual(
+        expect.arrayContaining([
+          join(home, ".config", "zed", "settings.json"),
+          join(home, ".config", "devin", "mcp_config.json"),
+          join(home, ".config", "opencode", "opencode.json"),
+        ]),
+      );
 
       const cases = [
         { label: "linux", options: linux },
@@ -1420,6 +1456,112 @@ describe("VS Code user mcp.json and Copilot mcp-config.json", () => {
       });
       expect(codes(missing)).toEqual(["NO_CONFIG"]);
       expect(codes(missing)).not.toContain("FILE_NOT_FOUND");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("reads Insiders and VSCodium user mcp.json unless --no-user", async () => {
+    const root = mkdtempSync(join(tmpdir(), "mcp-health-vscode-variants-"));
+    const home = mkdtempSync(join(tmpdir(), "mcp-health-vscode-variants-home-"));
+    const appData = join(home, "AppData", "Roaming");
+    try {
+      const products = ["Code - Insiders", "VSCodium"] as const;
+      for (const platform of ["darwin", "linux", "win32"] as const) {
+        const paths = __testing.vscodeUserMcpPaths({
+          platform,
+          home,
+          env: platform === "win32" ? { APPDATA: " " } : { XDG_CONFIG_HOME: "" },
+        });
+        expect(paths).toHaveLength(3);
+        for (const product of products) {
+          expect(
+            paths.some(
+              (entry) => entry.includes(product) && entry.endsWith(join("User", "mcp.json")),
+            ),
+          ).toBe(true);
+        }
+      }
+
+      const insiders = join(
+        home,
+        ".config",
+        "Code - Insiders",
+        "User",
+        "mcp.json",
+      );
+      const codium = join(home, ".config", "VSCodium", "User", "mcp.json");
+      writeJson(insiders, {
+        servers: {
+          insidersUser: {
+            command: "node",
+            args: ["--version"],
+            env: { TOKEN: vscodeSecret, PATH: "/opt/insiders" },
+          },
+        },
+      });
+      writeJson(codium, {
+        servers: {
+          codiumUser: { command: "node", args: ["--version"] },
+        },
+      });
+      const included = await runCheck({
+        root,
+        includeUserConfig: true,
+        home,
+        platform: "linux",
+        env: { XDG_CONFIG_HOME: "relative/xdg" },
+      });
+      expect(included.files).toContain(insiders);
+      expect(included.files).toContain(codium);
+      expect(included.files.some((file) => file.includes("relative/xdg"))).toBe(false);
+      expect(
+        included.servers.find((server) => server.name === "insidersUser")?.scope,
+      ).toBe("user");
+      expect(
+        included.servers.find((server) => server.name === "codiumUser")?.scope,
+      ).toBe("user");
+      expect(codes(included)).not.toContain("FILE_NOT_FOUND");
+      expect(codes(included)).not.toContain("COMMAND_NOT_FOUND");
+      expectSecretsHidden(included, [vscodeSecret]);
+
+      const skipped = await runCheck({
+        root,
+        includeUserConfig: false,
+        home,
+        platform: "linux",
+        env: {},
+      });
+      expect(skipped.files).not.toContain(insiders);
+      expect(skipped.files).not.toContain(codium);
+      expect(codes(skipped)).toEqual(["NO_CONFIG"]);
+
+      expect(
+        __testing.vscodeUserMcpPaths({
+          platform: "win32",
+          home,
+          env: { APPDATA: appData },
+        }),
+      ).toEqual([
+        join(appData, "Code", "User", "mcp.json"),
+        join(appData, "Code - Insiders", "User", "mcp.json"),
+        join(appData, "VSCodium", "User", "mcp.json"),
+      ]);
+      expect(
+        __testing.vscodeUserMcpPaths({ platform: "darwin", home, env: {} }),
+      ).toEqual([
+        join(home, "Library", "Application Support", "Code", "User", "mcp.json"),
+        join(
+          home,
+          "Library",
+          "Application Support",
+          "Code - Insiders",
+          "User",
+          "mcp.json",
+        ),
+        join(home, "Library", "Application Support", "VSCodium", "User", "mcp.json"),
+      ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(home, { recursive: true, force: true });
@@ -2119,6 +2261,12 @@ describe("OpenCode mcp config", () => {
         join(xdg, "opencode", "opencode.json"),
         join(xdg, "opencode", "opencode.jsonc"),
       ]);
+      expect(
+        __testing.opencodeUserPaths({ home, env: { XDG_CONFIG_HOME: "relative/xdg" } }),
+      ).toEqual(defaults);
+      expect(__testing.opencodeUserPaths({ home, env: { XDG_CONFIG_HOME: "  " } })).toEqual(
+        defaults,
+      );
       expect(
         __testing.opencodeUserPaths({
           home,
@@ -3138,6 +3286,244 @@ describe("Goose extensions", () => {
           .find((server) => server.name === "fromWindows")
           ?.findings.map((finding) => finding.code),
       ).toEqual(["HEALTHY"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Roo Code mcp.json", () => {
+  const secret = "roo-secret-do-not-print";
+
+  function writeJson(file: string, body: unknown) {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, JSON.stringify(body));
+  }
+
+  function settingsFile(base: string, product: string, name = "mcp_settings.json"): string {
+    return join(
+      base,
+      product,
+      "User",
+      "globalStorage",
+      "rooveterinaryinc.roo-cline",
+      "settings",
+      name,
+    );
+  }
+
+  it("reads .roo/mcp.json, skips a file with no mcpServers key, and does not rewrite it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "mcp-health-roo-project-"));
+    const file = join(root, ".roo", "mcp.json");
+    const nested = join(root, "services", "api", ".roo", "mcp.json");
+    try {
+      expect(__testing.PROJECT_CANDIDATES).toContain(".roo/mcp.json");
+      expect(discoverConfigPaths(root, { includeUserConfig: false })).toEqual([]);
+
+      const missing = await runCheck({ root, includeUserConfig: false, env: {} });
+      expect(codes(missing)).toEqual(["NO_CONFIG"]);
+      expect(codes(missing)).not.toContain("FILE_NOT_FOUND");
+
+      const original = JSON.stringify({
+        mcpServers: {
+          local: {
+            command: "node",
+            args: ["--version"],
+            env: { TOKEN: secret },
+            envFile: ".env.missing-roo",
+            alwaysAllow: ["search"],
+          },
+          remote: {
+            type: "streamable-http",
+            url: "https://example.com/mcp",
+            alwaysAllow: ["search"],
+          },
+          floating: { command: "npx", args: ["-y", "@scope/roo-server"] },
+          paused: { command: "definitely-missing-binary-xyz", disabled: true },
+        },
+      });
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, original);
+      writeJson(nested, {
+        mcpServers: { nested: { command: "node", args: ["--version"] } },
+      });
+
+      const parsed = parseConfigFile(file);
+      expect(parsed.format).toBe("mcpServers");
+      expect(parsed.servers.find((server) => server.name === "remote")?.transport).toEqual({
+        kind: "http",
+        url: "https://example.com/mcp",
+      });
+
+      const report = await runCheck({ root, includeUserConfig: false, env: {} });
+      expect(readFileSync(file, "utf8")).toBe(original);
+      expect(discoverConfigPaths(root, { includeUserConfig: false })).toEqual([file]);
+      expect(
+        discoverConfigPaths(root, { includeUserConfig: false, recursive: true }).sort(),
+      ).toEqual([file, nested].sort());
+      const byName = new Map(report.servers.map((server) => [server.name, server]));
+      expect(byName.get("local")?.scope).toBe("project");
+      expect(byName.get("local")?.findings.map((finding) => finding.code)).toEqual(["HEALTHY"]);
+      expect(byName.get("local")?.findings.map((finding) => finding.code)).not.toContain(
+        "ENV_FILE_MISSING",
+      );
+      expect(byName.get("remote")?.transport).toBe("http");
+      expect(byName.get("floating")?.findings.map((finding) => finding.code)).toContain(
+        "UNPINNED_PACKAGE",
+      );
+      expect(byName.get("paused")?.findings.map((finding) => finding.code)).toEqual(["DISABLED"]);
+      expect(codes(report)).not.toContain("SCHEMA_ERROR");
+      expect(codes(report)).not.toContain("ENV_FILE_MISSING");
+      expect(codes(report)).not.toContain("FILE_NOT_FOUND");
+      expectSecretsHidden(report, [secret]);
+
+      const nestedReport = await runCheck({
+        root,
+        includeUserConfig: false,
+        recursive: true,
+        env: {},
+      });
+      expect(names(nestedReport)).toContain("nested");
+      expect(
+        nestedReport.servers.find((server) => server.name === "nested")?.scope,
+      ).toBe("project");
+
+      writeJson(file, { alwaysAllow: [secret], theme: "dark" });
+      const skipped = await runCheck({ root, includeUserConfig: false, env: {} });
+      expect(codes(skipped)).toContain("SKIPPED_NO_MCP");
+      expect(codes(skipped)).not.toContain("NO_MCP_SECTION");
+      expect(codes(skipped)).not.toContain("FILE_NOT_FOUND");
+      expect(parseConfigFile(file).format).toBe("none");
+      expectSecretsHidden(skipped, [secret]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reads editor globalStorage unless --no-user, including the legacy filename", async () => {
+    const root = mkdtempSync(join(tmpdir(), "mcp-health-roo-user-"));
+    const home = mkdtempSync(join(tmpdir(), "mcp-health-roo-home-"));
+    const xdg = join(home, "xdg");
+    const appData = join(home, "AppData", "Roaming");
+    const projectFile = join(root, ".roo", "mcp.json");
+    try {
+      expect(__testing.rooUserPaths({ platform: "linux", home, env: {} })).toContain(
+        settingsFile(join(home, ".config"), "Code"),
+      );
+      expect(
+        __testing.rooUserPaths({ platform: "linux", home, env: { XDG_CONFIG_HOME: "relative/xdg" } }),
+      ).toContain(settingsFile(join(home, ".config"), "Cursor"));
+      expect(
+        __testing.rooUserPaths({ platform: "linux", home, env: { XDG_CONFIG_HOME: xdg } }),
+      ).toEqual(
+        expect.arrayContaining([
+          settingsFile(xdg, "Code"),
+          settingsFile(xdg, "Code - Insiders"),
+          settingsFile(xdg, "VSCodium"),
+          settingsFile(xdg, "Cursor"),
+          settingsFile(xdg, "Code", "cline_mcp_settings.json"),
+        ]),
+      );
+      expect(
+        __testing.rooUserPaths({ platform: "darwin", home, env: { XDG_CONFIG_HOME: xdg } }),
+      ).toContain(
+        settingsFile(join(home, "Library", "Application Support"), "Cursor"),
+      );
+      expect(
+        __testing.rooUserPaths({
+          platform: "win32",
+          home,
+          env: { APPDATA: "  ", XDG_CONFIG_HOME: xdg },
+        }),
+      ).toContain(settingsFile(join(home, "AppData", "Roaming"), "Code"));
+      expect(
+        __testing.rooUserPaths({ platform: "win32", home, env: { APPDATA: appData } }),
+      ).toContain(settingsFile(appData, "VSCodium", "cline_mcp_settings.json"));
+      expect(
+        __testing.rooUserPaths({ platform: "linux", home, env: {} }).some((entry) =>
+          entry.includes(".windsurf") || entry.includes("vscode-server"),
+        ),
+      ).toBe(false);
+
+      const absent = await runCheck({
+        root,
+        includeUserConfig: true,
+        home,
+        platform: "linux",
+        env: {},
+      });
+      expect(codes(absent)).toEqual(["NO_CONFIG"]);
+      expect(codes(absent)).not.toContain("FILE_NOT_FOUND");
+
+      const userFile = settingsFile(join(home, ".config"), "Code");
+      const legacyFile = settingsFile(join(home, ".config"), "Cursor", "cline_mcp_settings.json");
+      const userOriginal = JSON.stringify({
+        mcpServers: {
+          shared: {
+            command: "npx",
+            args: ["-y", "@scope/roo-user"],
+            env: { TOKEN: secret },
+          },
+          fromUser: { command: "node", args: ["--version"] },
+        },
+      });
+      mkdirSync(dirname(userFile), { recursive: true });
+      writeFileSync(userFile, userOriginal);
+      writeJson(legacyFile, {
+        mcpServers: { legacy: { command: "node", args: ["--version"] } },
+      });
+      writeJson(projectFile, {
+        mcpServers: {
+          shared: { command: "node", args: ["--version"] },
+          fromProject: { url: "https://example.com/mcp" },
+        },
+      });
+
+      const included = await runCheck({
+        root,
+        includeUserConfig: true,
+        home,
+        platform: "linux",
+        env: { XDG_CONFIG_HOME: " " },
+      });
+      expect(readFileSync(userFile, "utf8")).toBe(userOriginal);
+      const shared = included.servers.filter((server) => server.name === "shared");
+      expect(shared.map((server) => server.scope).sort()).toEqual(["project", "user"]);
+      expect(names(included)).toContain("fromUser");
+      expect(names(included)).toContain("fromProject");
+      expect(names(included)).toContain("legacy");
+      expect(included.servers.find((server) => server.name === "legacy")?.scope).toBe("user");
+      expect(included.files).toContain(userFile);
+      expect(included.files).toContain(legacyFile);
+      expect(included.files).toContain(projectFile);
+      expect(
+        shared.find((server) => server.scope === "user")?.findings.map((finding) => finding.code),
+      ).toContain("UNPINNED_PACKAGE");
+      expectSecretsHidden(included, [secret]);
+
+      const skipped = await runCheck({
+        root,
+        includeUserConfig: false,
+        home,
+        platform: "linux",
+        env: {},
+      });
+      expect(names(skipped).sort()).toEqual(["fromProject", "shared"]);
+      expect(skipped.files).toEqual([projectFile]);
+      expect(codes(skipped)).not.toContain("FILE_NOT_FOUND");
+
+      writeJson(userFile, { other: secret });
+      const userSkipped = await runCheck({
+        root,
+        includeUserConfig: true,
+        home,
+        platform: "linux",
+        env: {},
+      });
+      expect(codes(userSkipped)).toContain("SKIPPED_NO_MCP");
+      expect(codes(userSkipped)).not.toContain("NO_MCP_SECTION");
+      expectSecretsHidden(userSkipped, [secret]);
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(home, { recursive: true, force: true });

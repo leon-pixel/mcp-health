@@ -122,6 +122,7 @@ describe("--no-user help", () => {
       "Continue",
       "Junie",
       "Cline",
+      "Roo Code",
       "Gemini CLI",
       "Antigravity",
       "Kiro",

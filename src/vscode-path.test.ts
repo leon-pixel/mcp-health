@@ -109,6 +109,30 @@ describe("VS Code stdio PATH", () => {
     ).toBe("C:\\Windows;C:\\extra");
     expect(
       commandLookupEnv({ PATH: "/opt" }, base, "linux", {
+        file: join(home, ".config", "Code - Insiders", "User", "mcp.json"),
+        home,
+        platform: "linux",
+        env: {},
+      }).PATH,
+    ).toBe("/usr/bin:/opt");
+    expect(
+      commandLookupEnv({ PATH: "/opt" }, base, "linux", {
+        file: join(home, ".config", "VSCodium", "User", "mcp.json"),
+        home,
+        platform: "linux",
+        env: {},
+      }).PATH,
+    ).toBe("/usr/bin:/opt");
+    expect(
+      commandLookupEnv({ Path: "C:\\extra" }, { PATH: "C:\\Windows" }, "win32", {
+        file: join(appData, "Code - Insiders", "User", "mcp.json"),
+        home,
+        platform: "win32",
+        env: { APPDATA: "  " },
+      }).PATH,
+    ).toBe("C:\\Windows;C:\\extra");
+    expect(
+      commandLookupEnv({ PATH: "/opt" }, base, "linux", {
         file: join(home, ".copilot", "mcp-config.json"),
         home,
         platform: "linux",

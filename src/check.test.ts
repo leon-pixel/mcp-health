@@ -288,6 +288,7 @@ describe("discoverConfigPaths", () => {
     expect(__testing.PROJECT_CANDIDATES).not.toContain(".goose/config.yaml");
     expect(__testing.PROJECT_CANDIDATES).toContain("opencode.json");
     expect(__testing.PROJECT_CANDIDATES).toContain("opencode.jsonc");
+    expect(__testing.PROJECT_CANDIDATES).toContain(".roo/mcp.json");
     expect(__testing.claudeDesktopPaths().length).toBeGreaterThan(0);
   });
 
@@ -374,6 +375,15 @@ describe("discoverConfigPaths", () => {
 
       expect(
         __testing.claudeDesktopPaths({ platform: "win32", home, env: {} }),
+      ).toEqual([
+        join(home, "AppData", "Roaming", "Claude", "claude_desktop_config.json"),
+      ]);
+      expect(
+        __testing.claudeDesktopPaths({
+          platform: "win32",
+          home,
+          env: { APPDATA: "  ", LOCALAPPDATA: " " },
+        }),
       ).toEqual([
         join(home, "AppData", "Roaming", "Claude", "claude_desktop_config.json"),
       ]);

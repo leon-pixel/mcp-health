@@ -21,6 +21,7 @@ const PROJECT_CANDIDATES = [
   "opencode.json",
   "opencode.jsonc",
   ".junie/mcp/mcp.json",
+  ".roo/mcp.json",
   ".continue/config.yaml",
   ".windsurf/mcp_config.json",
   ".zed/settings.json",
@@ -71,6 +72,40 @@ function locate(options: LocateOptions = {}): {
   };
 }
 
+/** Unset and whitespace-only values are missing. A relative path is not. */
+function nonBlank(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+/**
+ * Windows roaming config root.
+ * A blank `APPDATA` is the same as an unset one: `%USERPROFILE%\AppData\Roaming`.
+ */
+function windowsRoaming(env: NodeJS.ProcessEnv, home: string): string {
+  return nonBlank(env.APPDATA) ?? join(home, "AppData", "Roaming");
+}
+
+/**
+ * Windows local config root.
+ * A blank `LOCALAPPDATA` is missing, so the Claude Desktop MSIX path is skipped.
+ */
+function windowsLocal(env: NodeJS.ProcessEnv): string | undefined {
+  return nonBlank(env.LOCALAPPDATA);
+}
+
+/**
+ * XDG config directory.
+ * A blank or relative `XDG_CONFIG_HOME` is not a directory. Use `~/.config`
+ * instead of resolving that value from the working directory.
+ * An absolute value is used as given.
+ */
+function xdgConfigDir(env: NodeJS.ProcessEnv, home: string): string {
+  const xdg = nonBlank(env.XDG_CONFIG_HOME);
+  if (xdg && isAbsolute(xdg)) return xdg;
+  return join(home, ".config");
+}
+
 function claudeDesktopPaths(options: LocateOptions = {}): string[] {
   const { platform: p, home, env } = locate(options);
   if (p === "darwin") {
@@ -79,10 +114,10 @@ function claudeDesktopPaths(options: LocateOptions = {}): string[] {
     ];
   }
   if (p === "win32") {
-    const appData = env.APPDATA ?? join(home, "AppData", "Roaming");
+    const appData = windowsRoaming(env, home);
     const paths = [join(appData, "Claude", "claude_desktop_config.json")];
-    // The MSIX build reads a virtualized Roaming file. Skip it when LOCALAPPDATA is unset.
-    const localAppData = env.LOCALAPPDATA;
+    // The MSIX build reads a virtualized Roaming file. Skip it when LOCALAPPDATA is blank.
+    const localAppData = windowsLocal(env);
     if (localAppData) {
       paths.push(
         join(
@@ -108,11 +143,9 @@ function windsurfUserPaths(options: LocateOptions = {}): string[] {
   const { platform: p, home, env } = locate(options);
   const paths = [join(home, ".codeium", "windsurf", "mcp_config.json")];
   if (p === "win32") {
-    const appData = env.APPDATA ?? join(home, "AppData", "Roaming");
-    paths.push(join(appData, "devin", "mcp_config.json"));
+    paths.push(join(windowsRoaming(env, home), "devin", "mcp_config.json"));
   } else {
-    const xdg = env.XDG_CONFIG_HOME ?? join(home, ".config");
-    paths.push(join(xdg, "devin", "mcp_config.json"));
+    paths.push(join(xdgConfigDir(env, home), "devin", "mcp_config.json"));
   }
   return paths;
 }
@@ -120,8 +153,7 @@ function windsurfUserPaths(options: LocateOptions = {}): string[] {
 function zedUserPaths(options: LocateOptions = {}): string[] {
   const { platform: p, home, env } = locate(options);
   if (p === "win32") {
-    const appData = env.APPDATA ?? join(home, "AppData", "Roaming");
-    return [join(appData, "Zed", "settings.json")];
+    return [join(windowsRoaming(env, home), "Zed", "settings.json")];
   }
   if (p === "darwin") {
     return [
@@ -129,8 +161,7 @@ function zedUserPaths(options: LocateOptions = {}): string[] {
       join(home, ".config", "zed", "settings.json"),
     ];
   }
-  const xdg = env.XDG_CONFIG_HOME ?? join(home, ".config");
-  return [join(xdg, "zed", "settings.json")];
+  return [join(xdgConfigDir(env, home), "zed", "settings.json")];
 }
 
 /**
@@ -190,28 +221,27 @@ function ampUserPaths(options: LocateOptions = {}): string[] {
 /**
  * Goose user config.
  * macOS and Linux: `$XDG_CONFIG_HOME/goose/config.yaml` when that variable is
- * an absolute path, otherwise `~/.config/goose/config.yaml`. A relative
- * `XDG_CONFIG_HOME` is ignored, matching Goose. Windows reads
+ * an absolute path, otherwise `~/.config/goose/config.yaml`. A blank or
+ * relative `XDG_CONFIG_HOME` is ignored, matching Goose. Windows reads
  * `%APPDATA%\Block\goose\config\config.yaml` and does not use `XDG_CONFIG_HOME`.
+ * A blank `APPDATA` uses `%USERPROFILE%\AppData\Roaming`.
  * There is no project config. `secrets.yaml` is not this file.
  * An absolute `GOOSE_PATH_ROOT` is not scanned.
  */
 function gooseUserPath(options: LocateOptions = {}): string {
   const { platform: p, home, env } = locate(options);
   if (p === "win32") {
-    const appData = env.APPDATA?.trim() || join(home, "AppData", "Roaming");
-    return join(appData, "Block", "goose", "config", "config.yaml");
+    return join(windowsRoaming(env, home), "Block", "goose", "config", "config.yaml");
   }
-  const xdg = env.XDG_CONFIG_HOME?.trim();
-  const base = xdg && isAbsolute(xdg) ? xdg : join(home, ".config");
-  return join(base, "goose", "config.yaml");
+  return join(xdgConfigDir(env, home), "goose", "config.yaml");
 }
 
 /**
  * OpenCode user config.
  * OpenCode reads `opencode.json` and `opencode.jsonc` from
  * `$XDG_CONFIG_HOME/opencode` (default `~/.config/opencode`) on macOS, Linux,
- * and Windows. It does not use `%APPDATA%`. A non-empty `OPENCODE_CONFIG`
+ * and Windows. It does not use `%APPDATA%`. A blank or relative
+ * `XDG_CONFIG_HOME` keeps `~/.config`. A non-empty `OPENCODE_CONFIG`
  * replaces those files. A blank value keeps the defaults.
  * Project `opencode.json` is a different file.
  */
@@ -219,28 +249,82 @@ function opencodeUserPaths(options: LocateOptions = {}): string[] {
   const { home, env } = locate(options);
   const explicit = env.OPENCODE_CONFIG?.trim();
   if (explicit) return [explicit];
-  const xdg = env.XDG_CONFIG_HOME?.trim() || join(home, ".config");
+  const xdg = xdgConfigDir(env, home);
   return [
     join(xdg, "opencode", "opencode.json"),
     join(xdg, "opencode", "opencode.jsonc"),
   ];
 }
 
+/** Product directories that hold a VS Code-family user `mcp.json`. Stable is first. */
+const VSCODE_USER_PRODUCTS = ["Code", "Code - Insiders", "VSCodium"] as const;
+
 /**
- * VS Code user MCP config opened by "MCP: Open User Configuration".
- * Insiders and VSCodium use different directories and are not scanned.
+ * Editors that can host the Roo Code extension.
+ * Cursor is included because Roo's globalStorage follows the editor, not `~/.cursor/mcp.json`.
+ * Windsurf is not in this list.
  */
-function vscodeUserMcpPath(options: LocateOptions = {}): string {
+const ROO_EDITOR_PRODUCTS = ["Code", "Code - Insiders", "VSCodium", "Cursor"] as const;
+
+const ROO_EXTENSION_ID = "rooveterinaryinc.roo-cline";
+
+/** Current global file, then the legacy name still present on unmigrated installs. */
+const ROO_SETTINGS_FILES = ["mcp_settings.json", "cline_mcp_settings.json"] as const;
+
+function productDataDirs(
+  products: readonly string[],
+  options: LocateOptions = {},
+): string[] {
   const { platform: p, home, env } = locate(options);
   if (p === "darwin") {
-    return join(home, "Library", "Application Support", "Code", "User", "mcp.json");
+    const base = join(home, "Library", "Application Support");
+    return products.map((product) => join(base, product));
   }
   if (p === "win32") {
-    const appData = env.APPDATA ?? join(home, "AppData", "Roaming");
-    return join(appData, "Code", "User", "mcp.json");
+    const base = windowsRoaming(env, home);
+    return products.map((product) => join(base, product));
   }
-  const xdg = env.XDG_CONFIG_HOME ?? join(home, ".config");
-  return join(xdg, "Code", "User", "mcp.json");
+  const base = xdgConfigDir(env, home);
+  return products.map((product) => join(base, product));
+}
+
+/**
+ * VS Code user MCP configs opened by "MCP: Open User Configuration".
+ * Stable, Insiders, and VSCodium each have their own product directory.
+ * The stable path is first.
+ */
+function vscodeUserMcpPaths(options: LocateOptions = {}): string[] {
+  return productDataDirs(VSCODE_USER_PRODUCTS, options).map((dir) =>
+    join(dir, "User", "mcp.json"),
+  );
+}
+
+/** Stable VS Code user `mcp.json`. Insiders and VSCodium are separate paths. */
+function vscodeUserMcpPath(options: LocateOptions = {}): string {
+  return vscodeUserMcpPaths(options)[0] ?? "";
+}
+
+/**
+ * Roo Code user MCP configs.
+ * Each host editor stores `mcp_settings.json` under
+ * `User/globalStorage/rooveterinaryinc.roo-cline/settings/`.
+ * `cline_mcp_settings.json` is the legacy name in that same directory.
+ * There is no `~/.roo/mcp.json`. Windsurf globalStorage and
+ * `~/.vscode-server` are not included.
+ */
+function rooUserPaths(options: LocateOptions = {}): string[] {
+  const paths: string[] = [];
+  for (const dir of productDataDirs(ROO_EDITOR_PRODUCTS, options)) {
+    const settings = join(
+      dir,
+      "User",
+      "globalStorage",
+      ROO_EXTENSION_ID,
+      "settings",
+    );
+    for (const file of ROO_SETTINGS_FILES) paths.push(join(settings, file));
+  }
+  return paths;
 }
 
 /** Copilot portable user config. `COPILOT_HOME` replaces `~/.copilot`. */
@@ -324,8 +408,7 @@ function samePathSegment(
 
 /**
  * VS Code project `.vscode/mcp.json`, and the user `mcp.json` from
- * "MCP: Open User Configuration". Insiders and VSCodium are different
- * directories and are not included.
+ * "MCP: Open User Configuration" for stable, Insiders, and VSCodium.
  */
 export function isVsCodeConfigFile(
   file: string,
@@ -343,7 +426,10 @@ export function isVsCodeConfigFile(
   ) {
     return true;
   }
-  return configPathIdentity(file) === configPathIdentity(vscodeUserMcpPath(options));
+  const wanted = configPathIdentity(file);
+  return vscodeUserMcpPaths(options).some(
+    (entry) => configPathIdentity(entry) === wanted,
+  );
 }
 
 /** Copilot user `mcp-config.json`, not the project `.github/mcp.json`. */
@@ -388,7 +474,7 @@ function userLevelPaths(options: LocateOptions = {}): string[] {
   const { home } = locate(options);
   return [
     join(home, ".cursor", "mcp.json"),
-    vscodeUserMcpPath(options),
+    ...vscodeUserMcpPaths(options),
     copilotUserPath(options),
     join(home, ".claude", "settings.json"),
     claudeCodeUserPath(options),
@@ -406,6 +492,7 @@ function userLevelPaths(options: LocateOptions = {}): string[] {
     join(home, ".continue", "config.yaml"),
     join(home, ".junie", "mcp", "mcp.json"),
     clineUserPath(options),
+    ...rooUserPaths(options),
   ];
 }
 
@@ -546,6 +633,8 @@ export const __testing = {
   gooseUserPath,
   opencodeUserPaths,
   vscodeUserMcpPath,
+  vscodeUserMcpPaths,
+  rooUserPaths,
   copilotUserPath,
   codexUserPath,
   userLevelPaths,

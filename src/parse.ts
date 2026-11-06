@@ -984,6 +984,28 @@ function parseGooseEntry(
   };
 }
 
+/**
+ * Roo Code project `.roo/mcp.json`, and the user globalStorage files
+ * `mcp_settings.json` and legacy `cline_mcp_settings.json`.
+ * A copy with no `mcpServers` key is normal. Other `mcp.json` files do not match.
+ */
+function isRooMcpFile(path: string, options: ParseOptions = {}): boolean {
+  const platform = options.platform ?? process.platform;
+  let normalized = path.replace(/\\/g, "/");
+  if (platform === "win32") normalized = normalized.toLowerCase();
+  if (normalized === ".roo/mcp.json" || normalized.endsWith("/.roo/mcp.json")) {
+    return true;
+  }
+  return (
+    normalized.endsWith(
+      "/rooveterinaryinc.roo-cline/settings/mcp_settings.json",
+    ) ||
+    normalized.endsWith(
+      "/rooveterinaryinc.roo-cline/settings/cline_mcp_settings.json",
+    )
+  );
+}
+
 /** Settings-style files may exist without an MCP section — don't hard-fail. */
 export function isOptionalMcpFile(
   path: string,
@@ -1001,6 +1023,7 @@ export function isOptionalMcpFile(
     isAmpSettings(path) ||
     isGooseConfig(path) ||
     isOpenCodeConfigFile(path, options) ||
+    isRooMcpFile(path, options) ||
     isClaudeUserConfig(path) ||
     isContinueConfig(path)
   );

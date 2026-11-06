@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "roo-local": {
+      "command": "node",
+      "args": ["--version"]
+    },
+    "roo-remote": {
+      "type": "streamable-http",
+      "url": "https://example.com/mcp",
+      "alwaysAllow": ["search"]
+    },
+    "roo-paused": {
+      "command": "definitely-missing-binary-xyz",
+      "disabled": true
+    }
+  }
+}

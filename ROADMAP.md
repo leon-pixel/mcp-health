@@ -53,9 +53,9 @@ Patch release on top of the published 1.2.0 package. IDE input variables and dis
 
 ## Next
 
-`1.4.0` is published. npm `latest` and the `v1` Action tag track that release.
+npm `latest` and the `v1` Action tag track the published `1.5.0` release. `package.json` stays `1.5.0` until a release tag is pushed. `main` has the unreleased checks in [CHANGELOG.md](./CHANGELOG.md), including nested scans, finding suppression, `init`, and the clients added since 1.5.0.
 
-Still open: Copilot's committed `.github/mcp.json`.
+Still open: [`.mcp-health.json` comments and code-wide matches](https://github.com/leon-pixel/mcp-health/issues/118), and [`resources/list` / `prompts/list` during `--probe`](https://github.com/leon-pixel/mcp-health/issues/119).
 
 The report includes a copy-paste fix for a finding and does not write config files.
 
