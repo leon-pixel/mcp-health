@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -28,6 +29,17 @@ function send(
 ) {
   res.writeHead(status, { "content-type": contentType, ...extra });
   res.end(body);
+}
+
+/** Empty resources and prompts catalogs. An empty list adds no probe finding. */
+function emptyCatalogBody(method: string | undefined, id: number | undefined): string | undefined {
+  if (method === "resources/list") {
+    return JSON.stringify({ jsonrpc: "2.0", id: id ?? 4, result: { resources: [] } });
+  }
+  if (method === "prompts/list") {
+    return JSON.stringify({ jsonrpc: "2.0", id: id ?? 5, result: { prompts: [] } });
+  }
+  return undefined;
 }
 
 describe("stdio probe", () => {
@@ -154,6 +166,10 @@ describe("stdio probe", () => {
     expect(skippedCodes).not.toContain("EMPTY_TOOLS");
     expect(skippedCodes).not.toContain("TOOLS_LIST_FAILED");
     expect(skippedCodes).not.toContain("TOOLS_OK");
+    expect(skippedCodes).not.toContain("RESOURCES_OK");
+    expect(skippedCodes).not.toContain("PROMPTS_OK");
+    expect(skippedCodes).not.toContain("RESOURCES_LIST_FAILED");
+    expect(skippedCodes).not.toContain("PROMPTS_LIST_FAILED");
     expect(skipped.summary.fail).toBe(0);
     expect(skipped.summary.warn).toBe(0);
     expect(skipped.servers.every((server) => server.status === "ok")).toBe(true);
@@ -205,6 +221,11 @@ describe("http probe", () => {
             }),
             "application/json",
           );
+          return;
+        }
+        const catalog = emptyCatalogBody(payload.method, payload.id);
+        if (catalog) {
+          send(res, 200, catalog, "application/json");
           return;
         }
         const sse = [
@@ -276,6 +297,11 @@ describe("http probe", () => {
             }),
             "application/json",
           );
+          return;
+        }
+        const catalog = emptyCatalogBody(payload.method, payload.id);
+        if (catalog) {
+          send(res, 200, catalog, "application/json");
           return;
         }
       }
@@ -360,6 +386,8 @@ describe("http probe", () => {
       expect(mcpCalls.map((entry) => JSON.parse(entry.body).method)).toEqual([
         "initialize",
         "tools/list",
+        "resources/list",
+        "prompts/list",
       ]);
       expect(mcpCalls.every((entry) => entry.session === undefined)).toBe(true);
       const modernCalls = seen.filter((entry) => entry.url === "/modern");
@@ -367,9 +395,13 @@ describe("http probe", () => {
         "initialize",
         "server/discover",
         "tools/list",
+        "resources/list",
+        "prompts/list",
       ]);
       expect(modernCalls[1]?.protocol).toBe("2026-07-28");
       expect(modernCalls[2]?.protocol).toBe("2026-07-28");
+      expect(modernCalls[3]?.protocol).toBe("2026-07-28");
+      expect(modernCalls[4]?.protocol).toBe("2026-07-28");
       expect(modernCalls.every((entry) => entry.session === undefined)).toBe(true);
       expect(seen.filter((entry) => entry.url === "/deny")).toHaveLength(1);
     } finally {
@@ -443,11 +475,15 @@ describe("http probe", () => {
       const result =
         payload.method === "tools/list"
           ? { tools: [{ name: "echo" }] }
-          : {
-              protocolVersion: "2025-11-25",
-              capabilities: {},
-              serverInfo: { name: "auth", version: "0" },
-            };
+          : payload.method === "resources/list"
+            ? { resources: [] }
+            : payload.method === "prompts/list"
+              ? { prompts: [] }
+              : {
+                  protocolVersion: "2025-11-25",
+                  capabilities: {},
+                  serverInfo: { name: "auth", version: "0" },
+                };
       send(
         res,
         200,
@@ -611,12 +647,17 @@ describe("http probe", () => {
 
       if (url === "/session" || url === "/sse" || url === "/fresh") {
         const expected = url === "/fresh" ? freshSession : legacySession;
-        if (payload.method === "tools/list") {
+        if (
+          payload.method === "tools/list" ||
+          payload.method === "resources/list" ||
+          payload.method === "prompts/list"
+        ) {
           if (req.headers["mcp-session-id"] !== expected) {
             rejectSession();
             return;
           }
-          send(res, 200, tools, "application/json");
+          const catalog = emptyCatalogBody(payload.method, payload.id);
+          send(res, 200, catalog ?? tools, "application/json");
           return;
         }
         if (url === "/sse") {
@@ -658,23 +699,33 @@ describe("http probe", () => {
           );
           return;
         }
-        if (payload.method === "tools/list") {
+        if (
+          payload.method === "tools/list" ||
+          payload.method === "resources/list" ||
+          payload.method === "prompts/list"
+        ) {
           if (req.headers["mcp-session-id"] !== discoverSession) {
             rejectSession();
             return;
           }
-          send(res, 200, tools, "application/json");
+          const catalog = emptyCatalogBody(payload.method, payload.id);
+          send(res, 200, catalog ?? tools, "application/json");
           return;
         }
       }
 
       if (url === "/plain" || url === "/keep" || url === "/blank") {
-        if (payload.method === "tools/list") {
+        if (
+          payload.method === "tools/list" ||
+          payload.method === "resources/list" ||
+          payload.method === "prompts/list"
+        ) {
           if (url !== "/keep" && req.headers["mcp-session-id"] !== undefined) {
             rejectSession();
             return;
           }
-          send(res, 200, tools, "application/json");
+          const catalog = emptyCatalogBody(payload.method, payload.id);
+          send(res, 200, catalog ?? tools, "application/json");
           return;
         }
         send(
@@ -759,47 +810,60 @@ describe("http probe", () => {
       const byName = new Map(report.servers.map((serverReport) => [serverReport.name, serverReport]));
       const codes = (name: string) => byName.get(name)?.findings.map((finding) => finding.code) ?? [];
 
+      const listed = ["tools/list", "resources/list", "prompts/list"] as const;
       expect(methods("/session")).toEqual([
         "initialize",
         "notifications/initialized",
-        "tools/list",
+        ...listed,
       ]);
       expect(calls("/session")[0]?.session).toBeUndefined();
       expect(calls("/session")[1]?.session).toBe(legacySession);
       expect(calls("/session")[2]?.session).toBe(legacySession);
+      expect(calls("/session")[3]?.session).toBe(legacySession);
+      expect(calls("/session")[4]?.session).toBe(legacySession);
       expect(calls("/session")[1]?.protocol).toBe("2025-11-25");
       expect(calls("/session")[2]?.protocol).toBe("2025-11-25");
+      expect(calls("/session")[3]?.protocol).toBe("2025-11-25");
+      expect(calls("/session")[4]?.protocol).toBe("2025-11-25");
 
       expect(methods("/sse")).toEqual([
         "initialize",
         "notifications/initialized",
-        "tools/list",
+        ...listed,
       ]);
       expect(calls("/sse")[0]?.session).toBeUndefined();
       expect(calls("/sse")[1]?.session).toBe(legacySession);
       expect(calls("/sse")[2]?.session).toBe(legacySession);
+      expect(calls("/sse")[3]?.session).toBe(legacySession);
+      expect(calls("/sse")[4]?.session).toBe(legacySession);
 
       expect(methods("/fresh")).toEqual([
         "initialize",
         "notifications/initialized",
-        "tools/list",
+        ...listed,
       ]);
       expect(calls("/fresh")[0]?.session).toBe("stale-config-session");
       expect(calls("/fresh")[1]?.session).toBe(freshSession);
       expect(calls("/fresh")[2]?.session).toBe(freshSession);
+      expect(calls("/fresh")[3]?.session).toBe(freshSession);
+      expect(calls("/fresh")[4]?.session).toBe(freshSession);
 
-      expect(methods("/discover")).toEqual(["initialize", "server/discover", "tools/list"]);
+      expect(methods("/discover")).toEqual(["initialize", "server/discover", ...listed]);
       expect(calls("/discover")[0]?.session).toBeUndefined();
       expect(calls("/discover")[1]?.session).toBe(initSession);
       expect(calls("/discover")[2]?.session).toBe(discoverSession);
+      expect(calls("/discover")[3]?.session).toBe(discoverSession);
+      expect(calls("/discover")[4]?.session).toBe(discoverSession);
       expect(calls("/discover")[1]?.protocol).toBe("2026-07-28");
       expect(calls("/discover")[2]?.protocol).toBe("2026-07-28");
+      expect(calls("/discover")[3]?.protocol).toBe("2026-07-28");
+      expect(calls("/discover")[4]?.protocol).toBe("2026-07-28");
 
-      expect(methods("/plain")).toEqual(["initialize", "tools/list"]);
+      expect(methods("/plain")).toEqual(["initialize", ...listed]);
       expect(calls("/plain").every((entry) => entry.session === undefined)).toBe(true);
-      expect(methods("/blank")).toEqual(["initialize", "tools/list"]);
+      expect(methods("/blank")).toEqual(["initialize", ...listed]);
       expect(calls("/blank").every((entry) => entry.session === undefined)).toBe(true);
-      expect(methods("/keep")).toEqual(["initialize", "tools/list"]);
+      expect(methods("/keep")).toEqual(["initialize", ...listed]);
       expect(calls("/keep").every((entry) => entry.session === "stale-config-session")).toBe(true);
 
       expect(methods("/boom")).toEqual(["initialize"]);
@@ -850,12 +914,359 @@ describe("http probe", () => {
       expect(skippedSession?.findings.map((finding) => finding.code)).not.toContain(
         "TOOLS_LIST_FAILED",
       );
+      expect(methods("/session")).not.toContain("resources/list");
+      expect(methods("/session")).not.toContain("prompts/list");
+      expect(methods("/plain")).not.toContain("resources/list");
+      expect(methods("/discover")).not.toContain("prompts/list");
+      for (const code of ["RESOURCES_OK", "PROMPTS_OK", "RESOURCES_LIST_FAILED", "PROMPTS_LIST_FAILED", "EMPTY_TOOLS"]) {
+        expect(skipped.servers.flatMap((entry) => entry.findings.map((finding) => finding.code))).not.toContain(code);
+      }
       const skippedText = rendered(skipped);
       for (const secret of secrets) expect(skippedText).not.toContain(secret);
       expect(readFileSync(file, "utf8")).toBe(original);
     } finally {
       rmSync(dir, { recursive: true, force: true });
       await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+    }
+  });
+
+  it("sends Mcp-Session-Id on tools, resources, and prompts and skips them with --no-tools", async () => {
+    const sessionId = "sess-catalog-do-not-print";
+    const seen: { method?: string; session?: string | string[] }[] = [];
+    const server = createServer(async (req, res) => {
+      const body = await readBody(req);
+      const payload = JSON.parse(body) as { id?: number; method?: string };
+      seen.push({ method: payload.method, session: req.headers["mcp-session-id"] });
+      const id = payload.id ?? 1;
+      if (payload.method === "notifications/initialized") {
+        res.writeHead(202);
+        res.end();
+        return;
+      }
+      if (payload.method === "initialize") {
+        send(
+          res,
+          200,
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id,
+            result: {
+              protocolVersion: "2025-11-25",
+              capabilities: {},
+              serverInfo: { name: "catalog", version: "0" },
+            },
+          }),
+          "application/json",
+          { "Mcp-Session-Id": sessionId },
+        );
+        return;
+      }
+      if (req.headers["mcp-session-id"] !== sessionId) {
+        send(
+          res,
+          400,
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id,
+            error: { code: -32600, message: "session required" },
+          }),
+          "application/json",
+        );
+        return;
+      }
+      if (payload.method === "tools/list") {
+        send(
+          res,
+          200,
+          JSON.stringify({ jsonrpc: "2.0", id, result: { tools: [] } }),
+          "application/json",
+        );
+        return;
+      }
+      if (payload.method === "resources/list") {
+        send(
+          res,
+          200,
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id,
+            result: {
+              resources: [
+                { uri: "file://notes", name: "notes" },
+                { uri: "file://more", name: "more" },
+              ],
+            },
+          }),
+          "application/json",
+        );
+        return;
+      }
+      if (payload.method === "prompts/list") {
+        send(
+          res,
+          200,
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id,
+            error: { code: -32601, message: "Method not found" },
+          }),
+          "application/json",
+        );
+        return;
+      }
+      send(res, 500, "unhandled", "text/plain");
+    });
+    await new Promise<void>((resolveListen) => {
+      server.listen(0, "127.0.0.1", () => resolveListen());
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("no port");
+    const dir = mkdtempSync(join(tmpdir(), "mcp-health-catalog-http-"));
+    const file = join(dir, "mcp.json");
+    const original = JSON.stringify({
+      mcpServers: {
+        notes: {
+          url: `http://127.0.0.1:${address.port}/mcp`,
+          headers: { Authorization: "Bearer catalog-secret-do-not-print" },
+        },
+      },
+    });
+    writeFileSync(file, original);
+
+    try {
+      const report = await runCheck({
+        root: dir,
+        includeUserConfig: false,
+        probe: true,
+        probeTimeoutMs: 4000,
+      });
+      const codes = report.servers.flatMap((entry) => entry.findings.map((finding) => finding.code));
+      expect(seen.map((entry) => entry.method)).toEqual([
+        "initialize",
+        "notifications/initialized",
+        "tools/list",
+        "resources/list",
+        "prompts/list",
+      ]);
+      expect(seen[0]?.session).toBeUndefined();
+      expect(seen.slice(1).every((entry) => entry.session === sessionId)).toBe(true);
+      expect(codes).toContain("PROBE_OK");
+      expect(codes).toContain("RESOURCES_OK");
+      expect(codes).not.toContain("EMPTY_TOOLS");
+      expect(codes).not.toContain("PROMPTS_OK");
+      expect(codes).not.toContain("PROMPTS_LIST_FAILED");
+      expect(codes).not.toContain("RESOURCES_LIST_FAILED");
+      const resources = report.servers
+        .flatMap((entry) => entry.findings)
+        .find((finding) => finding.code === "RESOURCES_OK");
+      expect(resources?.severity).toBe("ok");
+      expect(resources?.message).toContain("2");
+      expect(report.servers[0]?.status).toBe("ok");
+      const text = [formatHuman(report), formatJson(report), JSON.stringify(buildSarif(report))].join("\n");
+      expect(text).not.toContain(sessionId);
+      expect(text).not.toContain("catalog-secret-do-not-print");
+      expect(readFileSync(file, "utf8")).toBe(original);
+
+      seen.length = 0;
+      const skipped = await runCheck({
+        root: dir,
+        includeUserConfig: false,
+        probe: true,
+        probeListTools: false,
+        probeTimeoutMs: 4000,
+      });
+      expect(seen.map((entry) => entry.method)).toEqual([
+        "initialize",
+        "notifications/initialized",
+      ]);
+      const skippedCodes = skipped.servers.flatMap((entry) => entry.findings.map((finding) => finding.code));
+      expect(skippedCodes).toContain("PROBE_OK");
+      expect(skippedCodes).not.toContain("RESOURCES_OK");
+      expect(skippedCodes).not.toContain("EMPTY_TOOLS");
+      expect(skippedCodes).not.toContain("TOOLS_OK");
+      expect(readFileSync(file, "utf8")).toBe(original);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+    }
+  });
+});
+
+describe("resources and prompts lists", () => {
+  const catalogServer = `import readline from "node:readline";
+const mode = process.argv[2];
+const rl = readline.createInterface({ input: process.stdin });
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+rl.on("line", (line) => {
+  let msg;
+  try { msg = JSON.parse(line); } catch { return; }
+  const id = msg.id;
+  if (msg.method === "initialize") {
+    send({ jsonrpc: "2.0", id, result: { protocolVersion: "2025-11-25", capabilities: {}, serverInfo: { name: mode, version: "0" } } });
+    return;
+  }
+  if (msg.method === "tools/list") {
+    if (mode === "tools-down") {
+      send({ jsonrpc: "2.0", id, error: { code: -32603, message: "tools exploded" } });
+      return;
+    }
+    const tools = mode === "resources-only" || mode === "prompts-only" ? [] : [{ name: "echo" }];
+    send({ jsonrpc: "2.0", id, result: { tools } });
+    return;
+  }
+  if (msg.method === "resources/list") {
+    if (mode === "resources-missing" || mode === "prompts-error") {
+      send({ jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found" } });
+      return;
+    }
+    if (mode === "resources-shape") {
+      send({ jsonrpc: "2.0", id, result: {} });
+      return;
+    }
+    if (mode === "resources-only" || mode === "tools-down") {
+      send({ jsonrpc: "2.0", id, result: { resources: [{ uri: "file://a", name: "A" }, { uri: "file://b", name: "B" }] } });
+      return;
+    }
+    send({ jsonrpc: "2.0", id, result: { resources: [] } });
+    return;
+  }
+  if (msg.method === "prompts/list") {
+    if (mode === "prompts-error" || mode === "resources-shape") {
+      send({ jsonrpc: "2.0", id, error: { code: -32602, message: "prompts unavailable" } });
+      return;
+    }
+    if (mode === "resources-missing" || mode === "resources-only" || mode === "tools-down") {
+      send({ jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found" } });
+      return;
+    }
+    if (mode === "prompts-only") {
+      send({ jsonrpc: "2.0", id, result: { prompts: [{ name: "review" }] } });
+      return;
+    }
+    send({ jsonrpc: "2.0", id, result: { prompts: [] } });
+  }
+});
+`;
+
+  it("reports resources and prompts without treating an empty tool list as the whole catalog", async () => {
+    const root = mkdtempSync(join(tmpdir(), "mcp-health-catalog-stdio-"));
+    const script = join(root, "catalog.mjs");
+    const secret = "stdio-catalog-secret-do-not-print";
+    writeFileSync(script, catalogServer);
+    const config = {
+      mcpServers: {
+        "resources-only": {
+          command: "node",
+          args: ["catalog.mjs", "resources-only"],
+          env: { TOKEN: secret },
+        },
+        "resources-missing": { command: "node", args: ["catalog.mjs", "resources-missing"] },
+        "prompts-error": { command: "node", args: ["catalog.mjs", "prompts-error"] },
+        "resources-shape": { command: "node", args: ["catalog.mjs", "resources-shape"] },
+        "prompts-only": { command: "node", args: ["catalog.mjs", "prompts-only"] },
+        "tools-down": { command: "node", args: ["catalog.mjs", "tools-down"] },
+      },
+    };
+    const file = join(root, "mcp.json");
+    const original = JSON.stringify(config);
+    writeFileSync(file, original);
+    const readme = readFileSync(join(here, "..", "README.md"), "utf8");
+
+    try {
+      const report = await runCheck({
+        root,
+        includeUserConfig: false,
+        probe: true,
+        probeTimeoutMs: 4000,
+      });
+      const byName = new Map(report.servers.map((server) => [server.name, server]));
+      const codes = (name: string) => byName.get(name)?.findings.map((finding) => finding.code) ?? [];
+      const message = (name: string, code: string) =>
+        byName.get(name)?.findings.find((finding) => finding.code === code)?.message ?? "";
+
+      expect(byName.get("resources-only")?.status).toBe("ok");
+      expect(codes("resources-only")).toContain("RESOURCES_OK");
+      expect(codes("resources-only")).toContain("PROBE_OK");
+      expect(codes("resources-only")).not.toContain("EMPTY_TOOLS");
+      expect(codes("resources-only")).not.toContain("PROMPTS_OK");
+      expect(codes("resources-only")).not.toContain("PROMPTS_LIST_FAILED");
+      expect(message("resources-only", "RESOURCES_OK")).toContain("2");
+
+      expect(byName.get("prompts-only")?.status).toBe("ok");
+      expect(codes("prompts-only")).toContain("PROMPTS_OK");
+      expect(codes("prompts-only")).not.toContain("EMPTY_TOOLS");
+      expect(codes("prompts-only")).not.toContain("RESOURCES_OK");
+      expect(message("prompts-only", "PROMPTS_OK")).toContain("1");
+
+      expect(codes("resources-missing")).toContain("TOOLS_OK");
+      expect(codes("resources-missing")).not.toContain("RESOURCES_OK");
+      expect(codes("resources-missing")).not.toContain("RESOURCES_LIST_FAILED");
+      expect(codes("resources-missing")).not.toContain("PROMPTS_OK");
+      expect(codes("resources-missing")).not.toContain("PROMPTS_LIST_FAILED");
+      expect(codes("resources-missing")).not.toContain("EMPTY_TOOLS");
+      expect(byName.get("resources-missing")?.status).toBe("ok");
+
+      expect(byName.get("prompts-error")?.status).toBe("warn");
+      expect(codes("prompts-error")).toContain("TOOLS_OK");
+      expect(codes("prompts-error")).toContain("PROMPTS_LIST_FAILED");
+      expect(codes("prompts-error")).not.toContain("PROMPTS_OK");
+      expect(codes("prompts-error")).not.toContain("RESOURCES_LIST_FAILED");
+      expect(codes("prompts-error")).not.toContain("PROBE_FAILED");
+      expect(message("prompts-error", "PROMPTS_LIST_FAILED")).toContain("prompts unavailable");
+
+      expect(codes("resources-shape")).toContain("TOOLS_OK");
+      expect(codes("resources-shape")).toContain("RESOURCES_LIST_FAILED");
+      expect(message("resources-shape", "RESOURCES_LIST_FAILED")).toContain("no resources array");
+      expect(codes("resources-shape")).toContain("PROMPTS_LIST_FAILED");
+      expect(byName.get("resources-shape")?.status).toBe("warn");
+
+      expect(codes("tools-down")).toContain("TOOLS_LIST_FAILED");
+      expect(codes("tools-down")).toContain("RESOURCES_OK");
+      expect(codes("tools-down")).not.toContain("EMPTY_TOOLS");
+      expect(codes("tools-down")).not.toContain("PROBE_FAILED");
+      expect(byName.get("tools-down")?.status).toBe("warn");
+
+      const text = [
+        formatHuman(report),
+        formatJson(report),
+        JSON.stringify(buildSarif(report)),
+        formatAnnotations(report),
+      ].join("\n");
+      expect(text).not.toContain(secret);
+      expect(readFileSync(file, "utf8")).toBe(original);
+
+      const skipped = await runCheck({
+        root,
+        includeUserConfig: false,
+        probe: true,
+        probeListTools: false,
+        probeTimeoutMs: 4000,
+      });
+      const skippedCodes = skipped.servers.flatMap((server) => server.findings.map((finding) => finding.code));
+      expect(skippedCodes).toContain("PROBE_OK");
+      expect(skippedCodes).not.toContain("RESOURCES_OK");
+      expect(skippedCodes).not.toContain("PROMPTS_OK");
+      expect(skippedCodes).not.toContain("EMPTY_TOOLS");
+      expect(skippedCodes).not.toContain("TOOLS_LIST_FAILED");
+      expect(skippedCodes).not.toContain("PROMPTS_LIST_FAILED");
+      expect(skippedCodes).not.toContain("RESOURCES_LIST_FAILED");
+      expect(skipped.servers.every((server) => server.status === "ok")).toBe(true);
+      expect(readFileSync(file, "utf8")).toBe(original);
+
+      expect(readme).toContain("RESOURCES_OK");
+      expect(readme).toContain("PROMPTS_LIST_FAILED");
+      expect(readme).toContain("`--no-tools` skips all three calls");
+      const cli = spawnSync(
+        process.execPath,
+        [join(here, "..", "node_modules", ".bin", "tsx"), join(here, "..", "src", "cli.ts"), "check", "--help"],
+        { encoding: "utf8" },
+      );
+      expect(cli.status).toBe(0);
+      expect(cli.stdout.replace(/\s+/g, " ")).toContain(
+        "skip tools/list, resources/list, and prompts/list",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

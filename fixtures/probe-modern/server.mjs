@@ -51,5 +51,25 @@ rl.on("line", (line) => {
         result: { tools: [{ name: "echo", description: "fixture tool" }] },
       })}\n`,
     );
+    return;
+  }
+  if (msg?.method === "resources/list") {
+    process.stdout.write(
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        id: msg.id ?? 4,
+        result: { resources: [] },
+      })}\n`,
+    );
+    return;
+  }
+  if (msg?.method === "prompts/list") {
+    process.stdout.write(
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        id: msg.id ?? 5,
+        result: { prompts: [] },
+      })}\n`,
+    );
   }
 });

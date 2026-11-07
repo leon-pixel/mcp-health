@@ -52,7 +52,44 @@ function initializeRequest(): Record<string, unknown> {
   };
 }
 
-function toolsListRequest(modern: boolean): Record<string, unknown> {
+type ListedCatalog = {
+  method: "tools/list" | "resources/list" | "prompts/list";
+  id: number;
+  key: "tools" | "resources" | "prompts";
+  noun: string;
+  okCode: string;
+  failCode: string;
+};
+
+/** Called, in order, after a successful handshake unless `--no-tools` is set. */
+const LISTED_CATALOGS: ListedCatalog[] = [
+  {
+    method: "tools/list",
+    id: 3,
+    key: "tools",
+    noun: "tool",
+    okCode: "TOOLS_OK",
+    failCode: "TOOLS_LIST_FAILED",
+  },
+  {
+    method: "resources/list",
+    id: 4,
+    key: "resources",
+    noun: "resource",
+    okCode: "RESOURCES_OK",
+    failCode: "RESOURCES_LIST_FAILED",
+  },
+  {
+    method: "prompts/list",
+    id: 5,
+    key: "prompts",
+    noun: "prompt",
+    okCode: "PROMPTS_OK",
+    failCode: "PROMPTS_LIST_FAILED",
+  },
+];
+
+function catalogRequest(catalog: ListedCatalog, modern: boolean): Record<string, unknown> {
   const params: Record<string, unknown> = {};
   if (modern) {
     params._meta = {
@@ -63,8 +100,8 @@ function toolsListRequest(modern: boolean): Record<string, unknown> {
   }
   return {
     jsonrpc: "2.0",
-    id: 3,
-    method: "tools/list",
+    id: catalog.id,
+    method: catalog.method,
     params,
   };
 }
@@ -286,69 +323,83 @@ function finding(
   };
 }
 
-function toolsFinding(
+function oneFinding(
+  severity: Severity,
+  code: string,
+  message: string,
+  server: ParsedServer,
+  file: string,
+): Finding {
+  return { severity, code, message, server: server.name, file };
+}
+
+function catalogArray(result: unknown, key: ListedCatalog["key"]): unknown[] | undefined {
+  if (!result || typeof result !== "object" || Array.isArray(result)) return undefined;
+  const value = (result as Record<string, unknown>)[key];
+  return Array.isArray(value) ? value : undefined;
+}
+
+/**
+ * Tools: a missing or empty array is a warning. Resources and prompts: an
+ * empty array adds nothing, and method-not-found (`-32601`) adds nothing.
+ * Any other error, or a result with no array, is a warning.
+ */
+function interpretCatalog(
+  catalog: ListedCatalog,
   message: RpcMessage | undefined,
   server: ParsedServer,
   file: string,
   fallback: string,
-): Finding {
-  if (!message) {
-    return {
-      severity: "warn",
-      code: "TOOLS_LIST_FAILED",
-      message: fallback,
-      server: server.name,
-      file,
-    };
-  }
+): Finding | undefined {
+  const failed = (text: string) =>
+    oneFinding("warn", catalog.failCode, text, server, file);
+  if (!message) return failed(fallback);
   if (message.error) {
-    return {
-      severity: "warn",
-      code: "TOOLS_LIST_FAILED",
-      message: `tools/list error: ${message.error.message ?? "unknown"}`,
-      server: server.name,
-      file,
-    };
+    if (catalog.key !== "tools" && message.error.code === METHOD_NOT_FOUND) return undefined;
+    return failed(`${catalog.method} error: ${message.error.message ?? "unknown"}`);
   }
-  const result = message.result;
-  const tools =
-    result &&
-    typeof result === "object" &&
-    !Array.isArray(result) &&
-    Array.isArray((result as { tools?: unknown }).tools)
-      ? (result as { tools: unknown[] }).tools
-      : undefined;
-  if (!tools) {
-    return {
-      severity: "warn",
-      code: "TOOLS_LIST_FAILED",
-      message: "tools/list result has no tools array",
-      server: server.name,
-      file,
-    };
+  const items = catalogArray(message.result, catalog.key);
+  if (!items) return failed(`${catalog.method} result has no ${catalog.key} array`);
+  if (items.length === 0) {
+    if (catalog.key !== "tools") return undefined;
+    return oneFinding("warn", "EMPTY_TOOLS", "Server exposes no tools", server, file);
   }
-  if (tools.length === 0) {
-    return {
-      severity: "warn",
-      code: "EMPTY_TOOLS",
-      message: "Server exposes no tools",
-      server: server.name,
-      file,
-    };
-  }
-  return {
-    severity: "ok",
-    code: "TOOLS_OK",
-    message: `Server exposes ${tools.length} tool${tools.length === 1 ? "" : "s"}`,
-    server: server.name,
+  const noun = items.length === 1 ? catalog.noun : `${catalog.noun}s`;
+  return oneFinding(
+    "ok",
+    catalog.okCode,
+    `Server exposes ${items.length} ${noun}`,
+    server,
     file,
-  };
+  );
 }
 
-function withTools(base: ProbeResult, extra: Finding): ProbeResult {
+/**
+ * An empty tool list stays `EMPTY_TOOLS` unless resources or prompts actually
+ * published something. Those ok findings replace the empty-tools warning.
+ */
+function finishCatalogFindings(raw: Array<Finding | undefined>): Finding[] {
+  const findings: Finding[] = [];
+  let emptyTools: Finding | undefined;
+  let populatedCatalog = false;
+  for (const item of raw) {
+    if (!item) continue;
+    if (item.code === "EMPTY_TOOLS") {
+      emptyTools = item;
+      continue;
+    }
+    if (item.code === "RESOURCES_OK" || item.code === "PROMPTS_OK") populatedCatalog = true;
+    findings.push(item);
+  }
+  if (emptyTools && !populatedCatalog) findings.unshift(emptyTools);
+  return findings;
+}
+
+function withFindings(base: ProbeResult, extras: Finding[]): ProbeResult {
+  if (extras.length === 0) return base;
   return {
-    status: worst(base.status, extra.severity),
-    findings: [...base.findings, extra],
+    status: extras.reduce((status, extra) => worst(status, extra.severity), base.status),
+    findings: [...base.findings, ...extras],
   };
 }
 
@@ -477,37 +528,46 @@ export async function probeStdioServer(
       }
     }
 
-    if (options.listTools === false) {
+    const endStdin = () => {
       try {
         child.stdin?.end();
       } catch {
         /* ignore */
       }
+    };
+    if (options.listTools === false) {
+      endStdin();
       return base;
     }
 
-    try {
-      write(toolsListRequest(viaDiscover));
-      const toolsResponse = await reader.waitFor(3, remaining());
+    const raw: Array<Finding | undefined> = [];
+    for (const catalog of LISTED_CATALOGS) {
       try {
-        child.stdin?.end();
-      } catch {
-        /* ignore */
+        write(catalogRequest(catalog, viaDiscover));
+        const catalogResponse = await reader.waitFor(catalog.id, remaining());
+        raw.push(
+          interpretCatalog(
+            catalog,
+            catalogResponse,
+            server,
+            options.file,
+            `${catalog.method} returned no message`,
+          ),
+        );
+      } catch (err) {
+        raw.push(
+          oneFinding(
+            "warn",
+            catalog.failCode,
+            err instanceof Error ? err.message : String(err),
+            server,
+            options.file,
+          ),
+        );
       }
-      return withTools(
-        base,
-        toolsFinding(toolsResponse, server, options.file, "tools/list returned no message"),
-      );
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err);
-      return withTools(base, {
-        severity: "warn",
-        code: "TOOLS_LIST_FAILED",
-        message: detail,
-        server: server.name,
-        file: options.file,
-      });
     }
+    endStdin();
+    return withFindings(base, finishCatalogFindings(raw));
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     const stderrHint = stderr.trim()
@@ -761,7 +821,7 @@ async function postNotification(
     });
     await res.body?.cancel().catch(() => undefined);
   } catch {
-    /* tools/list reports its own result */
+    /* later list calls report their own results */
   } finally {
     clearTimeout(timer);
   }
@@ -860,7 +920,7 @@ async function withHttpTools(
   sessionId?: string,
 ): Promise<ProbeResult> {
   if (base.status !== "ok" || server.transport.kind !== "http") return base;
-  // The legacy handshake sends initialized before tools/list. Discover does not.
+  // The legacy handshake sends initialized before the catalog lists. Discover does not.
   // Only a session id minted by this probe adds that request; other servers stay as they were.
   if (!modern && sessionId) {
     await postNotification(
@@ -871,44 +931,50 @@ async function withHttpTools(
     );
   }
   if (options.listTools === false) return base;
-  try {
-    const exchange = await postJson(
-      server.transport.url,
-      toolsListRequest(modern),
-      requestHeaders(
-        server,
-        modern ? MODERN_PROTOCOL_VERSION : LEGACY_PROTOCOL_VERSION,
-        sessionId,
-      ),
-      remaining(),
-    );
-    if (exchange.status === 401 || exchange.status === 403) {
-      return withTools(base, {
-        severity: "warn",
-        code: "TOOLS_LIST_FAILED",
-        message: `tools/list unauthorized (${exchange.status})`,
-        server: server.name,
-        file: options.file,
-      });
+  const protocol = modern ? MODERN_PROTOCOL_VERSION : LEGACY_PROTOCOL_VERSION;
+  const raw: Array<Finding | undefined> = [];
+  for (const catalog of LISTED_CATALOGS) {
+    try {
+      const exchange = await postJson(
+        server.transport.url,
+        catalogRequest(catalog, modern),
+        requestHeaders(server, protocol, sessionId),
+        remaining(),
+      );
+      if (exchange.status === 401 || exchange.status === 403) {
+        raw.push(
+          oneFinding(
+            "warn",
+            catalog.failCode,
+            `${catalog.method} unauthorized (${exchange.status})`,
+            server,
+            options.file,
+          ),
+        );
+        continue;
+      }
+      raw.push(
+        interpretCatalog(
+          catalog,
+          exchange.message,
+          server,
+          options.file,
+          `${catalog.method} returned HTTP ${exchange.status} without a ${catalog.key} array`,
+        ),
+      );
+    } catch (err) {
+      raw.push(
+        oneFinding(
+          "warn",
+          catalog.failCode,
+          err instanceof Error ? err.message : String(err),
+          server,
+          options.file,
+        ),
+      );
     }
-    return withTools(
-      base,
-      toolsFinding(
-        exchange.message,
-        server,
-        options.file,
-        `tools/list returned HTTP ${exchange.status} without a tools array`,
-      ),
-    );
-  } catch (err) {
-    return withTools(base, {
-      severity: "warn",
-      code: "TOOLS_LIST_FAILED",
-      message: err instanceof Error ? err.message : String(err),
-      server: server.name,
-      file: options.file,
-    });
   }
+  return withFindings(base, finishCatalogFindings(raw));
 }
 
 export async function probeHttpServer(

@@ -51,7 +51,7 @@ export type RunOptions = {
   /** Attempt MCP initialize handshake. */
   probe?: boolean;
   probeTimeoutMs?: number;
-  /** With probe, call tools/list. Defaults to true. */
+  /** With probe, call tools/list, resources/list, and prompts/list. Defaults to true. */
   probeListTools?: boolean;
   /** Treat ${input:…} and unset ${env:…} as failures. */
   strictVariables?: boolean;
