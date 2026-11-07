@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { parseJsonc } from "./jsonc.js";
 import { worst } from "./probe.js";
 import type { Finding, ServerReport, Severity } from "./types.js";
 
@@ -39,6 +40,8 @@ const KNOWN_FINDING_CODES = new Set<string>([
   "PLACEHOLDER_ARG",
   "PLACEHOLDER_ENV",
   "PLACEHOLDER_HEADER",
+  "PROMPTS_LIST_FAILED",
+  "PROMPTS_OK",
   "PROBE_FAILED",
   "PROBE_HTTP_AUTH",
   "PROBE_HTTP_ERROR",
@@ -48,6 +51,8 @@ const KNOWN_FINDING_CODES = new Set<string>([
   "PROBE_OAUTH",
   "PROBE_OK",
   "PROBE_SKIPPED",
+  "RESOURCES_LIST_FAILED",
+  "RESOURCES_OK",
   "ROOT_NOT_FOUND",
   "SCHEMA_ERROR",
   "SCRIPT_NOT_FOUND",
@@ -62,8 +67,10 @@ const KNOWN_FINDING_CODES = new Set<string>([
 
 type IgnoreEntry = {
   code: string;
-  server: string;
-  file: string;
+  /** Omitted (or `"*"`) matches every server name. */
+  server?: string;
+  /** Omitted (or `"*"`) matches every config file. */
+  file?: string;
 };
 
 type Classified =
@@ -95,19 +102,32 @@ function warning(file: string, code: string, message: string, server?: string): 
   };
 }
 
+/**
+ * A missing field and `"*"` both match every server or every file.
+ * Any other present value must be a non-empty string, and it stays exact.
+ */
+function matchField(value: unknown): { ok: true; value?: string } | { ok: false } {
+  if (value === undefined) return { ok: true };
+  if (!isNonEmptyString(value)) return { ok: false };
+  if (value === "*") return { ok: true };
+  return { ok: true, value };
+}
+
 function classifyEntry(value: unknown): Classified {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { kind: "bad" };
   const record = value as Record<string, unknown>;
-  if (
-    !isNonEmptyString(record.code) ||
-    !isNonEmptyString(record.server) ||
-    !isNonEmptyString(record.file)
-  ) {
-    return { kind: "bad" };
-  }
-  const entry = { code: record.code, server: record.server, file: record.file };
+  const server = matchField(record.server);
+  const file = matchField(record.file);
+  if (!isNonEmptyString(record.code) || !server.ok || !file.ok) return { kind: "bad" };
+  const entry: IgnoreEntry = { code: record.code };
+  if (server.value !== undefined) entry.server = server.value;
+  if (file.value !== undefined) entry.file = file.value;
   if (!KNOWN_FINDING_CODES.has(entry.code)) return { kind: "unknown", entry };
   return { kind: "entry", entry };
+}
+
+function scopeLabel(value: string | undefined): string {
+  return value ?? "*";
 }
 
 /** Missing file means the scan is unchanged. A broken file is a config warning. */
@@ -129,7 +149,7 @@ function loadIgnore(root: string): LoadedIgnore | undefined {
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(text);
+    parsed = parseJsonc(text);
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     return {
@@ -166,7 +186,7 @@ function loadIgnore(root: string): LoadedIgnore | undefined {
 }
 
 /**
- * The entry `file` is relative to the scan root.
+ * A present `file` is relative to the scan root.
  * `mcp.json` and `services/api/mcp.json` are different files.
  * The finding message is not compared.
  */
@@ -180,7 +200,8 @@ function sameConfigFile(root: string, findingFile: string, entryFile: string): b
 
 function matches(root: string, finding: Finding, entry: IgnoreEntry): boolean {
   if (finding.code !== entry.code) return false;
-  if (finding.server !== entry.server) return false;
+  if (entry.server !== undefined && finding.server !== entry.server) return false;
+  if (entry.file === undefined) return true;
   if (!finding.file) return false;
   return sameConfigFile(root, finding.file, entry.file);
 }
@@ -196,8 +217,9 @@ function healthyFinding(server: ServerReport): Finding {
 }
 
 /**
- * Omit findings that match an ignore entry on code, server, and file.
- * A missing `.mcp-health.json` returns the same server list.
+ * Omit findings that match an ignore entry.
+ * `code` is required. An omitted `server` or `file` (or `"*"`) matches every
+ * server or config file. A missing `.mcp-health.json` returns the same server list.
  * Unknown codes and entries that match nothing are config-level warnings.
  * A server with nothing left is ok.
  */
@@ -211,7 +233,11 @@ export function applyIgnoreFile(root: string, servers: ServerReport[]): ServerRe
     for (const item of loaded.items) {
       if (item.kind === "bad") {
         warnings.push(
-          warning(loaded.path, "IGNORE_CONFIG", "Ignore entry must set code, server, and file"),
+          warning(
+            loaded.path,
+            "IGNORE_CONFIG",
+            'Ignore entry must set a non-empty code. server and file, when present, must be "*" or a non-empty string',
+          ),
         );
         continue;
       }
@@ -221,7 +247,7 @@ export function applyIgnoreFile(root: string, servers: ServerReport[]): ServerRe
           warning(
             loaded.path,
             "UNKNOWN_IGNORE",
-            `Ignore entry names an unknown code "${entry.code}" (server "${entry.server}", file "${entry.file}")`,
+            `Ignore entry names an unknown code "${entry.code}" (server "${scopeLabel(entry.server)}", file "${scopeLabel(entry.file)}")`,
             entry.server,
           ),
         );
@@ -262,7 +288,7 @@ export function applyIgnoreFile(root: string, servers: ServerReport[]): ServerRe
       warning(
         loaded.path,
         "STALE_IGNORE",
-        `Ignore entry matched no finding (code "${entry.code}", server "${entry.server}", file "${entry.file}")`,
+        `Ignore entry matched no finding (code "${entry.code}", server "${scopeLabel(entry.server)}", file "${scopeLabel(entry.file)}")`,
         entry.server,
       ),
     );

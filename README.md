@@ -1,6 +1,6 @@
 # mcp-health
 
-CLI and GitHub Action that scans MCP (Model Context Protocol) server configs and reports **broken entries, missing commands, bad URLs, placeholder env vars, unpinned packages, npm and PyPI drift, and optional initialize and tools/list probes**.
+CLI and GitHub Action that scans MCP (Model Context Protocol) server configs and reports **broken entries, missing commands, bad URLs, placeholder env vars, unpinned packages, npm and PyPI drift, and optional initialize, tools, resources, and prompts probes**.
 
 Catch rotten MCP configs before agents fail on them.
 
@@ -79,19 +79,21 @@ A warn or fail row for a missing command, an unpinned package, a bad URL, a plac
 
 ### Accepted findings
 
-A repository can record findings it has already accepted in `.mcp-health.json` at the scan root. That file is not an MCP config, and a nested copy is not read. A missing file leaves the scan unchanged.
+A repository can record findings it has already accepted in `.mcp-health.json` at the scan root. That file is not an MCP config, and a nested copy is not read. A missing file leaves the scan unchanged. Comments and trailing commas are allowed, the same as other JSON configs this tool reads.
 
-```json
+```jsonc
 {
+  // Accept this package everywhere under the scan root.
   "ignore": [
-    { "code": "UNPINNED_PACKAGE", "server": "unpinned", "file": "mcp.json" }
+    { "code": "UNPINNED_PACKAGE" },
+    { "code": "EMPTY_TOOLS", "server": "notes", "file": "mcp.json" }
   ]
 }
 ```
 
-`file` is relative to the scan root. `mcp.json` and `services/api/mcp.json` are different files. A match is exact on `code`, `server`, and `file`. The finding message is not compared, and a secret value is not required. The matched finding is left out of the text report, JSON, SARIF, and GitHub annotations. It does not count toward `warn` or `fail`, and it does not change the exit code. Another finding on that server still does. When nothing remains, the server is ok.
+`code` is required. `server` and `file` are optional. Omit `server`, or set it to `"*"`, to match every server name. Omit `file`, or set it to `"*"`, to match every config file. Omit both to match that code everywhere in the scan. A present `server` or `file` is an exact match. `file` is relative to the scan root, and `services\api\mcp.json` matches `services/api/mcp.json`. `mcp.json` and `services/api/mcp.json` are different files. The finding message is not compared, and a secret value is not required. The matched finding is left out of the text report, JSON, SARIF, and GitHub annotations. It does not count toward `warn` or `fail`, and it does not change the exit code. Another finding on that server still does. When nothing remains, the server is ok.
 
-An entry that names an unknown code is `UNKNOWN_IGNORE`. An entry that matches nothing is `STALE_IGNORE`. An ignore file that is not the object above is `IGNORE_CONFIG`. Those are config-level warnings, so a typo or a stale entry stays in the report and still exits 1 when nothing else is wrong. The scan does not rewrite the config or the ignore file, and it does not print secret values.
+An entry that names an unknown code is `UNKNOWN_IGNORE` and does not suppress a finding. An entry that matches nothing is `STALE_IGNORE`. An ignore file that is not this object, or an entry with no `code`, is `IGNORE_CONFIG`. A comment or a trailing comma is not `IGNORE_CONFIG`. Those warnings are config-level, so a typo or a stale entry stays in the report and still exits 1 when nothing else is wrong. The scan does not rewrite the config or the ignore file, and it does not print secret values.
 
 ## GitHub Action
 
@@ -271,14 +273,14 @@ A Codex `config.toml`, a `~/.claude.json` with no servers for this scan root, a 
 - `disabled: true` (Cursor, Kiro, Amazon Q) and `enabled: false` (Codex, Zed, OpenCode, Goose) are reported as disabled and are not checked
 - Zed `"source": "extension"` is an extension-provided server. It is not a missing command
 - `--online`: for `npx`, `npm exec`, `bunx`, `pnpm`, and `yarn`, npm latest vs the pinned version or semver range. For `uvx`, the same check reads PyPI project JSON (`info.version`) for the distribution name. `pkg==1.2.3`, `pkg>=1`, and extras such as `pkg[extra]==1.2.3` use that name, not the specifier. `NPM_CURRENT` when the pin includes latest, `NPM_DRIFT` when it does not, and `NPM_LATEST` when the package is unpinned. Those messages name npm or PyPI. A registry miss or a network failure is a warning, `NPM_LOOKUP_FAILED`, and the message names that registry. An offline scan does not call either registry
-- `--probe`: MCP handshake (stdio spawn, or HTTP POST). Stdio is spawned in the scan root, or in `cwd` when that client uses it. Stdio matches the JSON-RPC id and skips logs and notifications. HTTP sends the config headers, plus Codex `bearer_token_env_var` and `env_http_headers` when those variables are set. When initialize returns `Mcp-Session-Id`, the probe sends that header on the later requests in that probe (the initialized notification and `tools/list`). A successful `server/discover` fallback uses the session id from that response on `tools/list` instead. A server that does not mint a session id is unchanged. The session id is not printed. The HTTP probe speaks `http:` and `https:` only. `ws:`, `wss:`, `unix:`, and `pipe:` are `PROBE_SKIPPED`. A 401 with an OAuth `WWW-Authenticate` challenge is a warning (`PROBE_OAUTH`); the editor signs in and this probe does not. Env values are never printed
-- After a successful handshake, `--probe` also calls `tools/list`. One or more tools is `TOOLS_OK`. An empty list is a warning, `EMPTY_TOOLS`, not a failure and not `HEALTHY`. A tools/list error or timeout is a warning, `TOOLS_LIST_FAILED`. `--no-tools` skips that call
+- `--probe`: MCP handshake (stdio spawn, or HTTP POST). Stdio is spawned in the scan root, or in `cwd` when that client uses it. Stdio matches the JSON-RPC id and skips logs and notifications. HTTP sends the config headers, plus Codex `bearer_token_env_var` and `env_http_headers` when those variables are set. When initialize returns `Mcp-Session-Id`, the probe sends that header on the later requests in that probe (the initialized notification, `tools/list`, `resources/list`, and `prompts/list`). A successful `server/discover` fallback uses the session id from that response on those three calls instead. A server that does not mint a session id is unchanged. The session id is not printed. The HTTP probe speaks `http:` and `https:` only. `ws:`, `wss:`, `unix:`, and `pipe:` are `PROBE_SKIPPED`. A 401 with an OAuth `WWW-Authenticate` challenge is a warning (`PROBE_OAUTH`); the editor signs in and this probe does not. Env values are never printed
+- After a successful handshake, `--probe` also calls `tools/list`, `resources/list`, and `prompts/list`. One or more tools is `TOOLS_OK`. An empty tool list is a warning, `EMPTY_TOOLS`, including when resources and prompts are empty or unimplemented. It is not a failure and not `HEALTHY`. If that tool list is empty and resources or prompts are non-empty, the probe does not emit `EMPTY_TOOLS`. A non-empty resources list is `RESOURCES_OK`. A non-empty prompts list is `PROMPTS_OK`. An empty list adds nothing. JSON-RPC method-not-found (`-32601`) on resources or prompts adds nothing. A timeout, a transport failure, any other error, or a result with no `resources` or `prompts` array is a warning, `RESOURCES_LIST_FAILED` or `PROMPTS_LIST_FAILED`, and it does not remove `TOOLS_OK`. A tools/list error or timeout is still `TOOLS_LIST_FAILED`. `--no-tools` skips all three calls
 - Doc placeholders warn in env (`PLACEHOLDER_ENV`), headers, and Cursor `auth` (`PLACEHOLDER_HEADER`): `your-key-here`, `your-token-here`, `your-api-token`, `your-oauth-client-id`, `your-client-secret`, `<token>`, `YOUR_`, `REPLACE_`, empty, and `changeme`. A real token is not a placeholder and is not printed
 - Gemini CLI `$NAME` in an env value is `UNRESOLVED_VARIABLE` when that variable is unset, because the CLI substitutes an empty string. `%NAME%` is the same check on Windows. Other clients do not expand `$NAME`
 - In `.mcp.json` and `~/.claude.json`, a `url` with no `type` is `MISSING_TRANSPORT_TYPE`. Claude Code skips that entry until the type is `http`, `sse`, `ws`, or `streamable-http`. `type: "sdk"` is skipped, not `NO_TRANSPORT`. Cursor `.cursor/mcp.json` remote servers still omit `type`
 - Claude Code does not load `mcpServers` from `.claude/settings.json`, `.claude/settings.local.json`, or `~/.claude/settings.json`. A present key is `MCP_SERVERS_IGNORED` (a failure). Those entries are not checked and are not probed. Move project servers to `.mcp.json` and user servers to `~/.claude.json`. A settings file with no `mcpServers` key is skipped
 
-The initialize request uses protocol revision `2025-11-25`. If the server rejects that method, the probe tries `server/discover` on `2026-07-28`, then `tools/list` on that same revision.
+The initialize request uses protocol revision `2025-11-25`. If the server rejects that method, the probe tries `server/discover` on `2026-07-28`, then `tools/list`, `resources/list`, and `prompts/list` on that same revision.
 
 ## How this differs from Inspector and other health tools
 

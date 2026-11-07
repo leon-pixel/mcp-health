@@ -34,5 +34,15 @@ rl.on("line", (line) => {
         error: { code: -32602, message: "tools unavailable" },
       })}\n`,
     );
+    return;
+  }
+  if (msg?.method === "resources/list" || msg?.method === "prompts/list") {
+    process.stdout.write(
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        id: msg.id,
+        error: { code: -32601, message: "Method not found" },
+      })}\n`,
+    );
   }
 });
