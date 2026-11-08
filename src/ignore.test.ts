@@ -294,13 +294,24 @@ describe(".mcp-health.json suppressions", () => {
       expect(broken.files).toEqual([config]);
 
       writeJson(root, IGNORE_FILENAME, {
-        ignore: [{ code: "UNPINNED_PACKAGE", server: "unpinned" }],
+        ignore: [{ server: "unpinned", file: "mcp.json" }],
       });
       const partial = await runCheck({ root, includeUserConfig: false });
       expect(partial.servers.some((server) =>
         server.findings.some((finding) => finding.code === "UNPINNED_PACKAGE"),
       )).toBe(true);
       expect(partial.servers.some((server) =>
+        server.findings.some((finding) => finding.code === "IGNORE_CONFIG"),
+      )).toBe(true);
+
+      writeJson(root, IGNORE_FILENAME, {
+        ignore: [{ code: "UNPINNED_PACKAGE", server: 1, file: "mcp.json" }],
+      });
+      const badServer = await runCheck({ root, includeUserConfig: false });
+      expect(badServer.servers.some((server) =>
+        server.findings.some((finding) => finding.code === "UNPINNED_PACKAGE"),
+      )).toBe(true);
+      expect(badServer.servers.some((server) =>
         server.findings.some((finding) => finding.code === "IGNORE_CONFIG"),
       )).toBe(true);
 
@@ -380,7 +391,141 @@ describe(".mcp-health.json suppressions", () => {
       expect(readme).toContain(".mcp-health.json");
       expect(readme).toContain("STALE_IGNORE");
       expect(readme).toContain("UNKNOWN_IGNORE");
+      expect(readme).toContain("trailing commas");
     } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("suppresses one code in every file when server and file are omitted", async () => {
+    const root = mkdtempSync(join(tmpdir(), "mcp-health-ignore-any-"));
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const rootConfig = writeJson(root, "mcp.json", unpinnedConfig());
+    const nestedConfig = writeJson(root, "services/api/mcp.json", unpinnedConfig());
+    const ignore = writeJson(root, IGNORE_FILENAME, ignoreFile([{ code: "UNPINNED_PACKAGE" }]));
+    const before = [rootConfig, nestedConfig, ignore].map((file) => readFileSync(file));
+
+    try {
+      const report = await runCheck({ root, includeUserConfig: false, recursive: true });
+      expect(exitCode(report)).toBe(0);
+      expect(report.summary).toMatchObject({ ok: 2, warn: 0, fail: 0, configWarnings: 0 });
+      for (const file of [rootConfig, nestedConfig]) {
+        const server = report.servers.find((item) => item.file === file);
+        expect(server?.status).toBe("ok");
+        expect(server?.findings.map((finding) => finding.code)).toEqual(["HEALTHY"]);
+      }
+      const text = rendered(report);
+      expect(text).not.toContain("UNPINNED_PACKAGE");
+      expect(text).not.toContain("STALE_IGNORE");
+      expect(text).not.toContain(SECRET);
+      expect(ruleIds(report)).not.toContain("UNPINNED_PACKAGE");
+      expect(formatAnnotations(report)).toBe("");
+      expect([rootConfig, nestedConfig, ignore].map((file) => readFileSync(file))).toEqual(before);
+      expect(fetchSpy).not.toHaveBeenCalled();
+
+      writeJson(
+        root,
+        IGNORE_FILENAME,
+        ignoreFile([{ code: "UNPINNED_PACKAGE", server: "*", file: "*" }]),
+      );
+      const starred = await runCheck({ root, includeUserConfig: false, recursive: true });
+      expect(exitCode(starred)).toBe(0);
+      expect(starred.servers.filter((server) => server.name === "unpinned")).toHaveLength(2);
+      expect(
+        starred.servers
+          .filter((server) => server.name === "unpinned")
+          .every((server) => server.findings.map((finding) => finding.code).join() === "HEALTHY"),
+      ).toBe(true);
+      expect(rendered(starred)).not.toContain(SECRET);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("parses comments and trailing commas, and a stale code-only entry still warns", async () => {
+    const root = mkdtempSync(join(tmpdir(), "mcp-health-ignore-jsonc-"));
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const config = writeJson(root, "mcp.json", unpinnedConfig());
+    const ignorePath = join(root, IGNORE_FILENAME);
+    const jsonc = `{
+      // accepted in this package
+      "ignore": [
+        { "code": "UNPINNED_PACKAGE", "server": "unpinned", "file": "mcp.json", },
+      ],
+    }
+    `;
+    writeFileSync(ignorePath, jsonc);
+    const beforeConfig = readFileSync(config);
+
+    try {
+      const accepted = await runCheck({ root, includeUserConfig: false });
+      expect(exitCode(accepted)).toBe(0);
+      expect(accepted.servers.find((server) => server.name === "unpinned")?.findings.map((f) => f.code)).toEqual([
+        "HEALTHY",
+      ]);
+      expect(accepted.servers.some((server) =>
+        server.findings.some((finding) => finding.code === "IGNORE_CONFIG"),
+      )).toBe(false);
+      expect(rendered(accepted)).not.toContain("UNPINNED_PACKAGE");
+      expect(rendered(accepted)).not.toContain(SECRET);
+      expect(readFileSync(config)).toEqual(beforeConfig);
+      expect(readFileSync(ignorePath, "utf8")).toBe(jsonc);
+      expect(fetchSpy).not.toHaveBeenCalled();
+
+      writeFileSync(
+        ignorePath,
+        "{\n  /* nothing here matches */\n  \"ignore\": [\n    { \"code\": \"UNPINNED_PACKAGE\", },\n  ],\n}\n",
+      );
+      writeJson(root, "mcp.json", {
+        mcpServers: { local: { command: "node", args: ["--version"], env: { TOKEN: SECRET } } },
+      });
+      const stale = await runCheck({ root, includeUserConfig: false });
+      expect(exitCode(stale)).toBe(1);
+      const warning = stale.servers.find((server) => server.name === "(config)");
+      expect(warning?.findings.map((finding) => finding.code)).toEqual(["STALE_IGNORE"]);
+      expect(warning?.findings[0]?.message).toContain("UNPINNED_PACKAGE");
+      expect(warning?.findings[0]?.message).toContain('server "*"');
+      expect(warning?.findings[0]?.message).toContain('file "*"');
+      expect(stale.servers.find((server) => server.name === "local")?.status).toBe("ok");
+      expect(rendered(stale)).not.toContain(SECRET);
+      expect(rendered(stale)).not.toContain("IGNORE_CONFIG");
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an exact file entry from suppressing the same code in another file", async () => {
+    const root = mkdtempSync(join(tmpdir(), "mcp-health-ignore-one-file-"));
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const rootConfig = writeJson(root, "mcp.json", unpinnedConfig());
+    const nestedConfig = writeJson(root, "services/api/mcp.json", unpinnedConfig());
+    const ignore = writeJson(
+      root,
+      IGNORE_FILENAME,
+      ignoreFile([{ code: "UNPINNED_PACKAGE", server: "unpinned", file: "mcp.json" }]),
+    );
+    const before = [rootConfig, nestedConfig, ignore].map((file) => readFileSync(file));
+
+    try {
+      const report = await runCheck({ root, includeUserConfig: false, recursive: true });
+      const rootServer = report.servers.find((server) => server.file === rootConfig);
+      const nestedServer = report.servers.find((server) => server.file === nestedConfig);
+      expect(rootServer?.findings.map((finding) => finding.code)).toEqual(["HEALTHY"]);
+      expect(nestedServer?.findings.some((finding) => finding.code === "UNPINNED_PACKAGE")).toBe(
+        true,
+      );
+      expect(report.summary).toMatchObject({ ok: 1, warn: 1, fail: 0 });
+      expect(exitCode(report)).toBe(1);
+      expect(rendered(report)).not.toContain(SECRET);
+      expect(rendered(report)).not.toContain("STALE_IGNORE");
+      expect([rootConfig, nestedConfig, ignore].map((file) => readFileSync(file))).toEqual(before);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
       rmSync(root, { recursive: true, force: true });
     }
   });

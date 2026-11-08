@@ -54,7 +54,10 @@ program
     parseProbeTimeout,
     8000,
   )
-  .option("--no-tools", "With --probe, skip tools/list")
+  .option(
+    "--no-tools",
+    "With --probe, skip tools/list, resources/list, and prompts/list",
+  )
   .option(
     "--sarif <file>",
     "Write warn and fail findings as SARIF 2.1.0",
